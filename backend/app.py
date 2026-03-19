@@ -19,6 +19,13 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
 
+# Import models after extensions are initialized to avoid circular imports
+import models  # noqa: F401
+
+# Ensure tables are created on startup
+with app.app_context():
+    db.create_all()
+
 
 @app.route("/", methods=["GET"])
 def health_check():
