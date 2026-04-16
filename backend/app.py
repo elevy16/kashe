@@ -1,12 +1,14 @@
 import os
+import uuid
 
 from flask import Flask, jsonify, request
 from flask_jwt_extended import create_access_token
 from werkzeug.security import check_password_hash, generate_password_hash
+from sqlalchemy import func
 
 from extensions import db, jwt
 
-from models import Challenge, Enrollment, PointTxn, Reward
+from models import Challenge, Enrollment, PointTxn, Reward, Redemption
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
 
@@ -148,6 +150,49 @@ def checkin():
         "completed": completed,
         "points_earned": points_earned
     })
+
+
+@app.route('/api/rewards', methods=['GET'])
+@jwt_required()
+def get_rewards():
+    user_id = get_jwt_identity()
+    balance = db.session.query(func.sum(PointTxn.delta)).filter_by(user_id=user_id).scalar() or 0
+    rewards = Reward.query.filter_by(is_active=True).all()
+    result = []
+    for reward in rewards:
+        result.append({
+            'id': reward.id,
+            'title': reward.title,
+            'points_cost': reward.points_cost,
+            'can_afford': reward.points_cost <= balance
+        })
+    return jsonify({'balance': balance, 'rewards': result})
+
+
+@app.route('/api/redeem', methods=['POST'])
+@jwt_required()
+def redeem():
+    data = request.get_json() or {}
+    reward_id = data.get('reward_id')
+    if not reward_id:
+        return jsonify({"error": "reward_id is required"}), 400
+
+    user_id = get_jwt_identity()
+    balance = db.session.query(func.sum(PointTxn.delta)).filter_by(user_id=user_id).scalar() or 0
+    reward = Reward.query.filter_by(id=reward_id, is_active=True).first()
+    if not reward:
+        return jsonify({"error": "Reward not found or inactive"}), 404
+
+    if balance < reward.points_cost:
+        return jsonify({"error": "Insufficient points"}), 400
+
+    code = str(uuid.uuid4())
+    redemption = Redemption(user_id=user_id, reward_id=reward_id, code=code)
+    txn = PointTxn(user_id=user_id, delta=-reward.points_cost, reason=f"Redeemed: {reward.title}")
+    db.session.add(redemption)
+    db.session.add(txn)
+    db.session.commit()
+    return jsonify({"code": code, "reward_title": reward.title}), 201
 
 
 if __name__ == "__main__":

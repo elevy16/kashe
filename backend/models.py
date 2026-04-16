@@ -59,3 +59,13 @@ class Reward(db.Model):
     points_cost = db.Column(db.Integer, nullable=False)
     sponsor_id = db.Column(db.Integer, nullable=True)
     is_active = db.Column(db.Boolean, default=True)
+
+
+class Redemption(db.Model):
+    __tablename__ = "redemptions"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    reward_id = db.Column(db.Integer, db.ForeignKey('rewards.id'), nullable=False)
+    code = db.Column(db.String(50), nullable=False, unique=True)
+    redeemed_at = db.Column(db.DateTime, default=datetime.utcnow)
