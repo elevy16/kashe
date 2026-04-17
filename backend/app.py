@@ -10,9 +10,12 @@ from extensions import db, jwt
 
 from models import Challenge, Enrollment, PointTxn, Reward, Redemption
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_cors import CORS
 
 
 app = Flask(__name__)
+
+CORS(app, origins=["http://localhost:5173"])
 
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
     "DATABASE_URL", "sqlite:///kashe_dev.db"
