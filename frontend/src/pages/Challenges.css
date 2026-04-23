@@ -1,0 +1,98 @@
+.challenges-container {
+  min-height: 100vh;
+  background-color: #F7F5F2;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+.challenges-content {
+  flex: 1;
+  max-width: 390px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.challenges-content h1 {
+  color: #2D2D2D;
+  margin-bottom: 24px;
+  font-size: 28px;
+}
+
+.challenges-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.challenge-card {
+  background-color: white;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.challenge-title {
+  color: #2D2D2D;
+  font-size: 18px;
+  font-weight: bold;
+  margin: 0 0 8px 0;
+}
+
+.challenge-subtitle {
+  color: #888888;
+  font-size: 14px;
+  margin: 0 0 16px 0;
+}
+
+.enroll-button {
+  width: 100%;
+  padding: 12px 16px;
+  background-color: #8BAF9F;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+.enroll-button:hover:not(:disabled) {
+  background-color: #7a9d8d;
+}
+
+.enroll-button:active:not(:disabled) {
+  background-color: #6a8d7d;
+}
+
+.enroll-button.enrolled {
+  background-color: #cccccc;
+  color: #888888;
+  cursor: not-allowed;
+}
+
+.loading-message,
+.error-message,
+.no-challenges {
+  text-align: center;
+  padding: 20px;
+  font-size: 16px;
+}
+
+.loading-message {
+  color: #888888;
+}
+
+.error-message {
+  color: #d32f2f;
+  background-color: #ffebee;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.no-challenges {
+  color: #888888;
+  padding: 40px 20px;
+}

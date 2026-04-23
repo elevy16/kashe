@@ -5,10 +5,12 @@ from flask import Flask, jsonify, request
 from flask_jwt_extended import create_access_token
 from werkzeug.security import check_password_hash, generate_password_hash
 from sqlalchemy import func
+from google import genai
+from google.genai import types
 
 from extensions import db, jwt
 
-from models import Challenge, Enrollment, PointTxn, Reward, Redemption
+from models import Challenge, Enrollment, PointTxn, Reward, Redemption, User
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from flask_cors import CORS
 
@@ -93,6 +95,25 @@ def get_challenges():
             'required_classes': challenge.required_classes,
             'points_reward': challenge.points_reward,
             'deadline': str(challenge.deadline) if challenge.deadline else None
+        })
+    return jsonify(result)
+
+
+@app.route('/api/enrollments', methods=['GET'])
+@jwt_required()
+def get_enrollments():
+    user_id = get_jwt_identity()
+    enrollments = Enrollment.query.filter_by(user_id=user_id, status='active').all()
+    result = []
+    for enrollment in enrollments:
+        challenge = Challenge.query.get(enrollment.challenge_id)
+        result.append({
+            'id': enrollment.id,
+            'challenge_id': challenge.id,
+            'title': challenge.title,
+            'classes_completed': enrollment.classes_completed,
+            'required_classes': challenge.required_classes,
+            'points_reward': challenge.points_reward
         })
     return jsonify(result)
 
@@ -196,6 +217,85 @@ def redeem():
     db.session.add(txn)
     db.session.commit()
     return jsonify({"code": code, "reward_title": reward.title}), 201
+
+
+# Tool functions for Gemini
+def get_user_balance(user_id: str) -> dict:
+    """Get the user's current point balance."""
+    balance = db.session.query(func.sum(PointTxn.delta)).filter_by(user_id=user_id).scalar() or 0
+    return {"balance": balance}
+
+
+def get_user_challenges(user_id: str) -> dict:
+    """Get the user's enrolled challenges and their progress."""
+    enrollments = Enrollment.query.filter_by(user_id=user_id, status='active').all()
+    challenges = []
+    for enrollment in enrollments:
+        challenge = Challenge.query.get(enrollment.challenge_id)
+        if challenge:
+            challenges.append({
+                "title": challenge.title,
+                "classes_completed": enrollment.classes_completed,
+                "required_classes": challenge.required_classes,
+                "points_reward": challenge.points_reward,
+                "status": enrollment.status,
+            })
+    return {"challenges": challenges}
+
+
+@app.route('/api/chat', methods=['POST'])
+@jwt_required()
+def chat():
+    """Chat endpoint with Gemini AI using tool calling."""
+    data = request.get_json() or {}
+    message = data.get('message')
+
+    if not message:
+        return jsonify({"error": "message is required"}), 400
+
+    user_id = get_jwt_identity()
+
+    # Define tools as regular Python functions
+    def get_user_balance():
+        """Get the user's current point balance."""
+        balance = db.session.query(func.sum(PointTxn.delta)).filter_by(user_id=user_id).scalar() or 0
+        return {"balance": balance}
+
+    def get_user_challenges():
+        """Get the user's enrolled challenges and their progress."""
+        enrollments = Enrollment.query.filter_by(user_id=user_id, status='active').all()
+        challenges = []
+        for enrollment in enrollments:
+            challenge = Challenge.query.get(enrollment.challenge_id)
+            if challenge:
+                challenges.append({
+                    "title": challenge.title,
+                    "classes_completed": enrollment.classes_completed,
+                    "required_classes": challenge.required_classes,
+                    "points_reward": challenge.points_reward,
+                    "status": enrollment.status,
+                })
+        return {"challenges": challenges}
+
+    try:
+        # Create client
+        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+        # Generate content with tools
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=message,
+            config=types.GenerateContentConfig(
+                system_instruction="You are a friendly Kashé fitness coach. Kashé is a fitness loyalty app where users earn points by completing class challenges and redeem them for rewards. You have tools to look up the user's real point balance and challenge progress. Always use these tools to give accurate personalized responses. Be encouraging and brief.",
+                tools=[get_user_balance, get_user_challenges],
+            )
+        )
+
+        return jsonify({"reply": response.text}), 200
+
+    except Exception as err:
+        print(f"Chat error: {str(err)}")  # Debug logging
+        return jsonify({"error": f"Chat service error: {str(err)}"}), 500
 
 
 if __name__ == "__main__":

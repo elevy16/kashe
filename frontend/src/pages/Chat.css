@@ -1,0 +1,120 @@
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background-color: #F7F5F2;
+}
+
+.messages-area {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  max-width: 390px;
+  margin: 0 auto;
+  width: 100%;
+  align-items: flex-start;
+}
+
+.message-bubble {
+  max-width: 85%;
+  padding: 12px 16px;
+  border-radius: 16px;
+  word-wrap: break-word;
+  line-height: 1.4;
+  font-size: 15px;
+}
+
+.message-bubble.user {
+  align-self: flex-end;
+  background-color: #8BAF9F;
+  color: white;
+  border-radius: 16px 4px 16px 16px;
+}
+
+.message-bubble.ai {
+  align-self: flex-start;
+  background-color: white;
+  color: #2D2D2D;
+  border: 1px solid #E8E0D8;
+  border-radius: 4px 16px 16px 16px;
+}
+
+.message-bubble.thinking {
+  font-style: italic;
+  color: #888888;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.input-area {
+  display: flex;
+  gap: 8px;
+  padding: 16px 20px;
+  background-color: #F7F5F2;
+  max-width: 390px;
+  margin: 0 auto;
+  width: 100%;
+  border-top: 1px solid #E8E0D8;
+}
+
+.message-input {
+  flex: 1;
+  padding: 12px 16px;
+  border: 1px solid #E8E0D8;
+  border-radius: 8px;
+  font-size: 15px;
+  background-color: white;
+  color: #2D2D2D;
+}
+
+.message-input::placeholder {
+  color: #AAAAAA;
+}
+
+.message-input:focus {
+  outline: none;
+  border-color: #8BAF9F;
+  box-shadow: 0 0 0 2px rgba(139, 175, 159, 0.1);
+}
+
+.message-input:disabled {
+  background-color: #f0f0f0;
+  color: #888888;
+}
+
+.send-button {
+  padding: 12px 24px;
+  background-color: #8BAF9F;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+  white-space: nowrap;
+}
+
+.send-button:hover:not(:disabled) {
+  background-color: #7a9d8d;
+}
+
+.send-button:active:not(:disabled) {
+  background-color: #6a8d7d;
+}
+
+.send-button:disabled {
+  background-color: #cccccc;
+  cursor: not-allowed;
+}

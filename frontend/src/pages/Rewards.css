@@ -1,0 +1,109 @@
+.rewards-container {
+  min-height: 100vh;
+  background-color: #F7F5F2;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+.rewards-content {
+  flex: 1;
+  max-width: 390px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.balance-title {
+  color: #2D2D2D;
+  font-size: 32px;
+  font-weight: bold;
+  margin-bottom: 32px;
+  margin-top: 0;
+}
+
+.rewards-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.reward-card {
+  background-color: white;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.reward-title {
+  color: #2D2D2D;
+  font-size: 18px;
+  font-weight: bold;
+  margin: 0 0 8px 0;
+}
+
+.reward-subtitle {
+  color: #888888;
+  font-size: 14px;
+  margin: 0 0 16px 0;
+}
+
+.claim-button {
+  width: 100%;
+  padding: 12px 16px;
+  background-color: #8BAF9F;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+.claim-button:hover:not(:disabled) {
+  background-color: #7a9d8d;
+}
+
+.claim-button:active:not(:disabled) {
+  background-color: #6a8d7d;
+}
+
+.claim-button.disabled {
+  background-color: #E8E0D8;
+  color: #AAAAAA;
+  cursor: not-allowed;
+}
+
+.loading-message,
+.error-message,
+.success-message,
+.no-rewards {
+  text-align: center;
+  padding: 20px;
+  font-size: 16px;
+}
+
+.loading-message {
+  color: #888888;
+}
+
+.error-message {
+  color: #d32f2f;
+  background-color: #ffebee;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.success-message {
+  color: #2e7d32;
+  background-color: #e8f5e9;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.no-rewards {
+  color: #888888;
+  padding: 40px 20px;
+}
