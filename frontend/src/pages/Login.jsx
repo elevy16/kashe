@@ -18,6 +18,9 @@ function Login({ setIsAuthenticated }) {
       const data = await response.json();
       if (response.ok) {
         localStorage.setItem('token', data.token);
+        localStorage.setItem('name', data.name);
+        localStorage.setItem('email', data.email);
+        localStorage.setItem('created_at', data.created_at);
         setIsAuthenticated(true);
         navigate('/home');
       } else {

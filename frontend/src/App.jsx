@@ -6,6 +6,7 @@ import Home from './pages/Home';
 import Challenges from './pages/Challenges';
 import Rewards from './pages/Rewards';
 import Chat from './pages/Chat';
+import Profile from './pages/Profile';
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('token'));
@@ -33,6 +34,7 @@ function App() {
         <Route path="/challenges" element={isAuthenticated ? <Challenges /> : <Navigate to="/" />} />
         <Route path="/rewards" element={isAuthenticated ? <Rewards /> : <Navigate to="/" />} />
         <Route path="/chat" element={isAuthenticated ? <Chat /> : <Navigate to="/" />} />
+        <Route path="/profile" element={isAuthenticated ? <Profile /> : <Navigate to="/" />} />
       </Routes>
     </Router>
   );

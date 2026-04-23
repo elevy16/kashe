@@ -32,6 +32,7 @@ function Navbar({ setIsAuthenticated }) {
     { path: '/home', label: 'Home' },
     { path: '/challenges', label: 'Challenges' },
     { path: '/rewards', label: 'Rewards' },
+    { path: '/profile', label: 'Profile' },
     { path: '/chat', label: 'Chat' },
   ];
 
@@ -72,7 +73,7 @@ function Navbar({ setIsAuthenticated }) {
       </aside>
 
       <nav className="bottom-nav">
-        {navItems.map((item) => (
+        {navItems.filter(item => item.path !== '/chat').map((item) => (
           <Link key={item.path} to={item.path} className={location.pathname === item.path ? 'active' : ''}>
             {item.label}
           </Link>

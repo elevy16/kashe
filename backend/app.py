@@ -80,7 +80,12 @@ def login():
         return jsonify({"error": "Invalid credentials"}), 401
 
     token = create_access_token(identity=str(user.id))
-    return jsonify({"token": token}), 200
+    return jsonify({
+        "token": token,
+        "name": user.name,
+        "email": user.email,
+        "created_at": user.created_at.isoformat()
+    }), 200
 
 
 @app.route('/api/challenges', methods=['GET'])
@@ -217,6 +222,26 @@ def redeem():
     db.session.add(txn)
     db.session.commit()
     return jsonify({"code": code, "reward_title": reward.title}), 201
+
+
+@app.route('/api/profile/stats', methods=['GET'])
+@jwt_required()
+def get_profile_stats():
+    user_id = get_jwt_identity()
+    challenges_completed = Enrollment.query.filter_by(user_id=user_id, status='completed').count()
+    rewards_redeemed = Redemption.query.filter_by(user_id=user_id).count()
+    return jsonify({
+        "challenges_completed": challenges_completed,
+        "rewards_redeemed": rewards_redeemed
+    })
+
+
+@app.route('/api/point_txns/lifetime', methods=['GET'])
+@jwt_required()
+def get_lifetime_points():
+    user_id = get_jwt_identity()
+    lifetime_points = db.session.query(func.sum(PointTxn.delta)).filter(PointTxn.user_id == user_id, PointTxn.delta > 0).scalar() or 0
+    return jsonify({"lifetime_points": lifetime_points})
 
 
 # Tool functions for Gemini

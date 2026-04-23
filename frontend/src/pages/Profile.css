@@ -1,0 +1,143 @@
+.profile-container {
+  min-height: 100vh;
+  background-color: #F7F5F2;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+.profile-content {
+  flex: 1;
+  max-width: 390px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.profile-header {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.avatar {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background-color: #8BAF9F;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px;
+}
+
+.avatar-text {
+  color: white;
+  font-size: 28px;
+  font-weight: 700;
+  font-family: 'Playfair Display', serif;
+}
+
+.profile-name {
+  font-family: 'Playfair Display', serif;
+  font-size: 28px;
+  font-weight: 700;
+  color: #2D2D2D;
+  margin: 0 0 8px 0;
+}
+
+.profile-email {
+  color: #888888;
+  font-size: 16px;
+  margin: 0;
+  font-family: 'Inter', sans-serif;
+}
+
+.divider {
+  height: 1px;
+  background-color: #E8E0D8;
+  margin: 32px 0;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+.stat-card {
+  background-color: white;
+  border-radius: 12px;
+  padding: 20px;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.stat-value {
+  font-family: 'Playfair Display', serif;
+  font-size: 32px;
+  font-weight: 700;
+  color: #8BAF9F;
+  margin-bottom: 8px;
+}
+
+.stat-label {
+  color: #888888;
+  font-size: 14px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.member-since {
+  text-align: center;
+  color: #888888;
+  font-size: 14px;
+  font-style: italic;
+  margin: 0;
+}
+
+.loading-message,
+.error-message {
+  text-align: center;
+  padding: 40px 20px;
+  font-size: 16px;
+}
+
+.loading-message {
+  color: #666;
+}
+
+.error-message {
+  color: #d32f2f;
+}
+
+@media (min-width: 768px) {
+  .profile-container {
+    padding: 40px 40px 40px 280px;
+  }
+
+  .profile-content {
+    max-width: 600px;
+  }
+
+  .profile-name {
+    font-size: 36px;
+  }
+
+  .avatar {
+    width: 100px;
+    height: 100px;
+  }
+
+  .avatar-text {
+    font-size: 36px;
+  }
+
+  .stat-card {
+    padding: 24px;
+  }
+
+  .stat-value {
+    font-size: 40px;
+  }
+}
