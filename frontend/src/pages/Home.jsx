@@ -85,16 +85,10 @@ function Home({ setIsAuthenticated }) {
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    setIsAuthenticated(false);
-    navigate('/');
-  };
-
   return (
     <div className="home-container">
       <div className="home-content">
-        <h1 className="logo">◇ kashé</h1>
+        <h1 className="logo logo-mobile">◇ kashé</h1>
 
         <h2 className="balance-display">{balance}</h2>
         <p className="balance-label">points</p>
@@ -145,12 +139,9 @@ function Home({ setIsAuthenticated }) {
           </div>
         </div>
 
-        <button className="logout-button" onClick={handleLogout}>
-          Logout
-        </button>
       </div>
 
-      <Navbar />
+      <Navbar setIsAuthenticated={setIsAuthenticated} />
     </div>
   );
 }

@@ -17,6 +17,7 @@
   color: #2D2D2D;
   margin-bottom: 24px;
   font-size: 28px;
+  font-family: 'Playfair Display', serif;
 }
 
 .challenges-grid {
@@ -95,4 +96,20 @@
 .no-challenges {
   color: #888888;
   padding: 40px 20px;
+}
+
+@media (min-width: 768px) {
+  .challenges-container {
+    padding: 40px 40px 40px 280px;
+  }
+
+  .challenges-content {
+    max-width: 900px;
+  }
+
+  .challenges-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 24px;
+  }
 }

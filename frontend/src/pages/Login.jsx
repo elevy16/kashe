@@ -29,15 +29,19 @@ function Login({ setIsAuthenticated }) {
   };
 
   return (
-    <div>
-      <h1>Login to Kashé</h1>
-      <form onSubmit={handleSubmit}>
-        <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-        <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-        <button type="submit">Login</button>
-      </form>
-      {error && <p>{error}</p>}
-      <Link to="/register">Register</Link>
+    <div className="auth-page">
+      <div className="auth-card">
+        <h1>Login to Kashé</h1>
+        <form onSubmit={handleSubmit}>
+          <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          <button type="submit">Login</button>
+        </form>
+        {error && <p className="form-error">{error}</p>}
+        <p className="form-footer">
+          Don't have an account? <Link to="/register">Register</Link>
+        </p>
+      </div>
     </div>
   );
 }

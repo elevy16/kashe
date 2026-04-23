@@ -28,16 +28,20 @@ function Register() {
   };
 
   return (
-    <div>
-      <h1>Register for Kashé</h1>
-      <form onSubmit={handleSubmit}>
-        <input type="text" placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} required />
-        <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-        <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-        <button type="submit">Register</button>
-      </form>
-      {error && <p>{error}</p>}
-      <Link to="/">Back to Login</Link>
+    <div className="auth-page">
+      <div className="auth-card">
+        <h1>Register for Kashé</h1>
+        <form onSubmit={handleSubmit}>
+          <input type="text" placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} required />
+          <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          <button type="submit">Register</button>
+        </form>
+        {error && <p className="form-error">{error}</p>}
+        <p className="form-footer">
+          Already have an account? <Link to="/">Back to Login</Link>
+        </p>
+      </div>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 .chat-container {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  min-height: 100vh;
   background-color: #F7F5F2;
 }
 
@@ -117,4 +117,19 @@
 .send-button:disabled {
   background-color: #cccccc;
   cursor: not-allowed;
+}
+
+@media (min-width: 768px) {
+  .chat-container {
+    padding: 40px 40px 40px 280px;
+  }
+
+  .messages-area {
+    max-width: 900px;
+  }
+
+  .input-area {
+    max-width: 900px;
+    margin: 0 auto;
+  }
 }
