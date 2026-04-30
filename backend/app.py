@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
 import uuid
 
@@ -104,21 +107,41 @@ def get_challenges():
     return jsonify(result)
 
 
+@app.route('/api/challenges/<int:challenge_id>', methods=['GET'])
+@jwt_required()
+def get_challenge_detail(challenge_id):
+    challenge = Challenge.query.get(challenge_id)
+    if not challenge:
+        return jsonify({'error': 'Challenge not found'}), 404
+
+    return jsonify({
+        'id': challenge.id,
+        'title': challenge.title,
+        'required_classes': challenge.required_classes,
+        'points_reward': challenge.points_reward,
+        'deadline': str(challenge.deadline) if challenge.deadline else None,
+        'is_active': challenge.is_active
+    })
+
+
 @app.route('/api/enrollments', methods=['GET'])
 @jwt_required()
 def get_enrollments():
     user_id = get_jwt_identity()
-    enrollments = Enrollment.query.filter_by(user_id=user_id, status='active').all()
+    enrollments = Enrollment.query.filter_by(user_id=user_id).all()
     result = []
     for enrollment in enrollments:
         challenge = Challenge.query.get(enrollment.challenge_id)
+        if not challenge:
+            continue
         result.append({
             'id': enrollment.id,
             'challenge_id': challenge.id,
             'title': challenge.title,
             'classes_completed': enrollment.classes_completed,
             'required_classes': challenge.required_classes,
-            'points_reward': challenge.points_reward
+            'points_reward': challenge.points_reward,
+            'status': enrollment.status
         })
     return jsonify(result)
 

@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import './Challenges.css';
 
 function Challenges() {
+  const navigate = useNavigate();
   const [challenges, setChallenges] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -98,7 +100,11 @@ function Challenges() {
 
         <div className="challenges-grid">
           {challenges.map((challenge) => (
-            <div key={challenge.id} className="challenge-card">
+            <div
+              key={challenge.id}
+              className="challenge-card"
+              onClick={() => navigate(`/challenges/${challenge.id}`)}
+            >
               <h2 className="challenge-title">{challenge.title}</h2>
               <p className="challenge-subtitle">
                 {challenge.required_classes} classes · {challenge.points_reward} pts
@@ -107,7 +113,10 @@ function Challenges() {
                 className={`enroll-button ${
                   enrolledChallenges.has(challenge.id) ? 'enrolled' : ''
                 }`}
-                onClick={() => handleEnroll(challenge.id)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleEnroll(challenge.id);
+                }}
                 disabled={enrolledChallenges.has(challenge.id) || enrollingId === challenge.id}
               >
                 {enrolledChallenges.has(challenge.id) ? 'Enrolled' : 'Join'}

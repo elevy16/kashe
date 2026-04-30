@@ -4,6 +4,7 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import Home from './pages/Home';
 import Challenges from './pages/Challenges';
+import ChallengeDetail from './pages/ChallengeDetail';
 import Rewards from './pages/Rewards';
 import Chat from './pages/Chat';
 import Profile from './pages/Profile';
@@ -32,6 +33,7 @@ function App() {
         <Route path="/register" element={<Register />} />
         <Route path="/home" element={isAuthenticated ? <Home setIsAuthenticated={setIsAuthenticated} /> : <Navigate to="/" />} />
         <Route path="/challenges" element={isAuthenticated ? <Challenges /> : <Navigate to="/" />} />
+        <Route path="/challenges/:id" element={isAuthenticated ? <ChallengeDetail /> : <Navigate to="/" />} />
         <Route path="/rewards" element={isAuthenticated ? <Rewards /> : <Navigate to="/" />} />
         <Route path="/chat" element={isAuthenticated ? <Chat /> : <Navigate to="/" />} />
         <Route path="/profile" element={isAuthenticated ? <Profile /> : <Navigate to="/" />} />

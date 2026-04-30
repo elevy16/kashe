@@ -8,7 +8,6 @@ function Home({ setIsAuthenticated }) {
   const [enrollments, setEnrollments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [loggingId, setLoggingId] = useState(null);
   const navigate = useNavigate();
 
   const fetchData = async () => {
@@ -44,47 +43,6 @@ function Home({ setIsAuthenticated }) {
     fetchData();
   }, []);
 
-  const handleLogClass = async (enrollmentId, enrollmentIndex) => {
-    try {
-      setLoggingId(enrollmentId);
-      const token = localStorage.getItem('token');
-
-      const response = await fetch('http://127.0.0.1:5000/api/checkin', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({ enrollment_id: enrollmentId }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to log class');
-      }
-
-      const data = await response.json();
-
-      // Update the enrollment with new progress
-      setEnrollments((prev) => {
-        const updated = [...prev];
-        updated[enrollmentIndex] = {
-          ...updated[enrollmentIndex],
-          classes_completed: data.classes_completed,
-        };
-        return updated;
-      });
-
-      // Update balance if challenge was completed
-      if (data.points_earned > 0) {
-        setBalance((prev) => prev + data.points_earned);
-      }
-    } catch (err) {
-      setError(err.message || 'An error occurred while logging class');
-    } finally {
-      setLoggingId(null);
-    }
-  };
-
   return (
     <div className="home-container">
       <div className="home-content">
@@ -105,15 +63,16 @@ function Home({ setIsAuthenticated }) {
           )}
 
           <div className="enrollments-grid">
-            {enrollments.map((enrollment, index) => {
+            {enrollments.map((enrollment) => {
               const progress = enrollment.required_classes > 0
                 ? (enrollment.classes_completed / enrollment.required_classes) * 100
                 : 0;
-              const isComplete =
-                enrollment.classes_completed >= enrollment.required_classes;
-
               return (
-                <div key={enrollment.id} className="enrollment-card">
+                <div
+                  key={enrollment.id}
+                  className="enrollment-card"
+                  onClick={() => navigate(`/challenges/${enrollment.challenge_id}`)}
+                >
                   <h4 className="enrollment-title">{enrollment.title}</h4>
                   <div className="progress-container">
                     <div className="progress-bar">
@@ -126,17 +85,13 @@ function Home({ setIsAuthenticated }) {
                       {enrollment.classes_completed} / {enrollment.required_classes} classes
                     </p>
                   </div>
-                  <button
-                    className={`log-class-button ${isComplete ? 'complete' : ''}`}
-                    onClick={() => handleLogClass(enrollment.id, index)}
-                    disabled={isComplete || loggingId === enrollment.id}
-                  >
-                    {isComplete ? 'Completed' : 'Log a Class'}
-                  </button>
                 </div>
               );
             })}
           </div>
+          <button className="browse-challenges-button" onClick={() => navigate('/challenges')}>
+            Browse Challenges →
+          </button>
         </div>
 
       </div>
