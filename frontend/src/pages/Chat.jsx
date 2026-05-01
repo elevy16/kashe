@@ -2,17 +2,49 @@ import { useState, useEffect, useRef } from 'react';
 import Navbar from '../components/Navbar';
 import './Chat.css';
 
+const CHAT_STORAGE_KEY = 'kashe_chat_history';
+
+const DEFAULT_WELCOME = {
+  id: 0,
+  text: "Hi! I'm your Kashé coach. Ask me about your points, challenges, or anything fitness related!",
+  sender: 'ai',
+};
+
+function readStoredChat() {
+  if (typeof sessionStorage === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(CHAT_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+    const valid = parsed.filter(
+      (m) =>
+        m &&
+        typeof m === 'object' &&
+        typeof m.text === 'string' &&
+        (m.sender === 'user' || m.sender === 'ai') &&
+        !m.isThinking
+    );
+    return valid.length > 0 ? valid : null;
+  } catch {
+    return null;
+  }
+}
+
 function Chat() {
-  const [messages, setMessages] = useState([
-    {
-      id: 0,
-      text: "Hi! I'm your Kashé coach. Ask me about your points, challenges, or anything fitness related!",
-      sender: 'ai',
-    },
-  ]);
+  const [messages, setMessages] = useState(() => readStoredChat() ?? [DEFAULT_WELCOME]);
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef(null);
+
+  useEffect(() => {
+    const persistable = messages.filter((m) => !m.isThinking);
+    try {
+      sessionStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(persistable));
+    } catch {
+      // sessionStorage unavailable or quota exceeded
+    }
+  }, [messages]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -23,26 +55,31 @@ function Chat() {
   }, [messages]);
 
   const sendMessage = async () => {
-    if (!inputValue.trim()) return;
+    const trimmed = inputValue.trim();
+    if (!trimmed) return;
 
-    // Add user message immediately
-    const userMessage = {
-      id: messages.length,
-      text: inputValue,
-      sender: 'user',
-    };
-    setMessages((prev) => [...prev, userMessage]);
+    setMessages((prev) => {
+      const maxId = prev.reduce(
+        (m, x) => (typeof x.id === 'number' && x.id > m ? x.id : m),
+        -1
+      );
+      const userId = maxId + 1;
+      const thinkingId = maxId + 2;
+      return [
+        ...prev,
+        { id: userId, text: trimmed, sender: 'user' },
+        { id: thinkingId, text: 'thinking...', sender: 'ai', isThinking: true },
+      ];
+    });
     setInputValue('');
-
-    // Show thinking bubble
-    const thinkingMessage = {
-      id: messages.length + 1,
-      text: 'thinking...',
-      sender: 'ai',
-      isThinking: true,
-    };
-    setMessages((prev) => [...prev, thinkingMessage]);
     setLoading(true);
+
+    const history = messages
+      .filter((m) => !m.isThinking)
+      .map((m) => ({
+        role: m.sender === 'user' ? 'user' : 'model',
+        text: m.text,
+      }));
 
     try {
       const token = localStorage.getItem('token');
@@ -50,9 +87,9 @@ function Chat() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ message: inputValue }),
+        body: JSON.stringify({ message: trimmed, history }),
       });
 
       if (!response.ok) {
@@ -61,25 +98,27 @@ function Chat() {
 
       const data = await response.json();
 
-      // Replace thinking message with AI response
       setMessages((prev) => {
         const updated = [...prev];
+        const last = updated[updated.length - 1];
+        if (!last?.isThinking) return prev;
         updated[updated.length - 1] = {
-          id: updated.length,
-          text: data.reply || "I'm sorry, I didn't understand that. Please try again.",
-          sender: 'ai',
+          ...last,
+          text:
+            data.reply ||
+            "I'm sorry, I didn't understand that. Please try again.",
           isThinking: false,
         };
         return updated;
       });
     } catch (err) {
-      // Replace thinking message with error
       setMessages((prev) => {
         const updated = [...prev];
+        const last = updated[updated.length - 1];
+        if (!last?.isThinking) return prev;
         updated[updated.length - 1] = {
-          id: updated.length,
-          text: "Sorry, I encountered an error. Please try again.",
-          sender: 'ai',
+          ...last,
+          text: 'Sorry, I encountered an error. Please try again.',
           isThinking: false,
         };
         return updated;

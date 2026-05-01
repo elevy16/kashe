@@ -3,6 +3,7 @@ load_dotenv()
 
 import os
 import uuid
+from pathlib import Path
 
 from flask import Flask, jsonify, request
 from flask_jwt_extended import create_access_token
@@ -18,12 +19,18 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from flask_cors import CORS
 
 
+_BACKEND_DIR = Path(__file__).resolve().parent
+_INSTANCE_DIR = _BACKEND_DIR / "instance"
+_INSTANCE_DIR.mkdir(parents=True, exist_ok=True)
+# Stable on-disk SQLite (same file no matter which cwd you start Flask from).
+_DEFAULT_SQLITE_URI = "sqlite:///" + (_INSTANCE_DIR / "kashe_dev.db").resolve().as_posix()
+
 app = Flask(__name__)
 
 CORS(app, origins=["http://localhost:5173"])
 
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
-    "DATABASE_URL", "sqlite:///kashe_dev.db"
+    "DATABASE_URL", _DEFAULT_SQLITE_URI
 )
 app.config["JWT_SECRET_KEY"] = os.getenv(
     "JWT_SECRET_KEY", "dev-secret-change-in-production"
@@ -50,14 +57,16 @@ def health_check():
 @app.route("/api/register", methods=["POST"])
 def register():
     data = request.get_json() or {}
-    name = data.get("name")
-    email = data.get("email")
+    name = (data.get("name") or "").strip()
+    email = (data.get("email") or "").strip().lower()
     password = data.get("password")
 
     if not name or not email or not password:
         return jsonify({"error": "Name, email, and password are required"}), 400
 
-    existing = models.User.query.filter_by(email=email).first()
+    existing = models.User.query.filter(
+        func.lower(models.User.email) == email
+    ).first()
     if existing:
         return jsonify({"error": "Email already registered"}), 409
 
@@ -72,15 +81,28 @@ def register():
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.get_json() or {}
-    email = data.get("email")
+    # Accept "email" or "username" — same field for whatever the user typed (email or display name).
+    identifier = (data.get("email") or data.get("username") or "").strip()
     password = data.get("password")
 
-    if not email or not password:
+    if not identifier or not password:
         return jsonify({"error": "Email and password are required"}), 400
 
-    user = models.User.query.filter_by(email=email).first()
-    if not user or not check_password_hash(user.password_hash, password):
-        return jsonify({"error": "Invalid credentials"}), 401
+    user = models.User.query.filter(
+        func.lower(models.User.email) == func.lower(identifier)
+    ).first()
+    if not user:
+        name_matches = models.User.query.filter(
+            func.lower(models.User.name) == func.lower(identifier)
+        ).all()
+        if len(name_matches) == 1:
+            user = name_matches[0]
+
+    if not user:
+        return jsonify({"error": "No account found for that email or name."}), 401
+
+    if not check_password_hash(user.password_hash, password):
+        return jsonify({"error": "Incorrect password."}), 401
 
     token = create_access_token(identity=str(user.id))
     return jsonify({
@@ -267,51 +289,62 @@ def get_lifetime_points():
     return jsonify({"lifetime_points": lifetime_points})
 
 
-# Tool functions for Gemini
+# --- Gemini chat tools (read + action). DB access runs inside app.app_context(). ---
+
+CHAT_SYSTEM_INSTRUCTION = """You are an action-oriented Kashé fitness coach and assistant.
+Kashé is a fitness loyalty app where users earn points by completing
+class challenges and redeem them for rewards.
+
+CRITICAL RULES:
+- When a user confirms they want to do something, IMMEDIATELY call
+  the appropriate tool. Do not describe what you will do - just do it.
+- When user says 'yes', 'yup', 'sure', 'ok', 'do it', or any
+  confirmation - call the action tool right away.
+- Never say 'I'll enroll you' without actually calling enroll_in_challenge.
+- Never say 'I'll log a class' without actually calling log_class_for_challenge.
+- Never say 'I'll redeem' without actually calling redeem_reward_for_user.
+- After calling a tool, report the result to the user.
+
+You have tools to look up data AND take real actions.
+For logging a class, just do it directly without asking.
+For enrolling and redeeming, confirm once then immediately act.
+Be encouraging, brief, and action-oriented.
+
+Never use markdown formatting like **bold** or *bullets*
+in your responses. Use plain text only.
+
+The authenticated user's ID is: {authenticated_user_id}"""
+
+
 def get_user_balance(user_id: str) -> dict:
-    """Get the user's current point balance."""
-    balance = db.session.query(func.sum(PointTxn.delta)).filter_by(user_id=user_id).scalar() or 0
-    return {"balance": balance}
+    """Get the user's current point balance.
+
+    Args:
+        user_id: Authenticated user's id (string from JWT).
+
+    Returns:
+        dict with key ``balance`` (int).
+    """
+    with app.app_context():
+        balance = (
+            db.session.query(func.sum(PointTxn.delta)).filter_by(user_id=user_id).scalar()
+            or 0
+        )
+        return {"balance": balance}
 
 
 def get_user_challenges(user_id: str) -> dict:
-    """Get the user's enrolled challenges and their progress."""
-    enrollments = Enrollment.query.filter_by(user_id=user_id, status='active').all()
-    challenges = []
-    for enrollment in enrollments:
-        challenge = Challenge.query.get(enrollment.challenge_id)
-        if challenge:
-            challenges.append({
-                "title": challenge.title,
-                "classes_completed": enrollment.classes_completed,
-                "required_classes": challenge.required_classes,
-                "points_reward": challenge.points_reward,
-                "status": enrollment.status,
-            })
-    return {"challenges": challenges}
+    """Get all of the user's enrollments (active and completed) and their progress.
 
+    Args:
+        user_id: Authenticated user's id (string from JWT).
 
-@app.route('/api/chat', methods=['POST'])
-@jwt_required()
-def chat():
-    """Chat endpoint with Gemini AI using tool calling."""
-    data = request.get_json() or {}
-    message = data.get('message')
-
-    if not message:
-        return jsonify({"error": "message is required"}), 400
-
-    user_id = get_jwt_identity()
-
-    # Define tools as regular Python functions
-    def get_user_balance():
-        """Get the user's current point balance."""
-        balance = db.session.query(func.sum(PointTxn.delta)).filter_by(user_id=user_id).scalar() or 0
-        return {"balance": balance}
-
-    def get_user_challenges():
-        """Get the user's enrolled challenges and their progress."""
-        enrollments = Enrollment.query.filter_by(user_id=user_id, status='active').all()
+    Returns:
+        dict with key ``challenges``: list of dicts with title, classes_completed,
+        required_classes, points_reward, status.
+    """
+    with app.app_context():
+        enrollments = Enrollment.query.filter_by(user_id=user_id).all()
         challenges = []
         for enrollment in enrollments:
             challenge = Challenge.query.get(enrollment.challenge_id)
@@ -325,18 +358,281 @@ def chat():
                 })
         return {"challenges": challenges}
 
+
+def list_available_challenges(user_id: str) -> dict:
+    """List active challenges the user is not enrolled in yet.
+
+    Args:
+        user_id: Authenticated user's id (string from JWT).
+
+    Returns:
+        dict with key ``challenges``: list of dicts with id, title, required_classes, points_reward.
+    """
+    with app.app_context():
+        enrolled_ids = [
+            row[0]
+            for row in db.session.query(Enrollment.challenge_id)
+            .filter_by(user_id=user_id)
+            .distinct()
+            .all()
+        ]
+        q = Challenge.query.filter_by(is_active=True)
+        if enrolled_ids:
+            q = q.filter(~Challenge.id.in_(enrolled_ids))
+        rows = q.all()
+        return {
+            "challenges": [
+                {
+                    "id": c.id,
+                    "title": c.title,
+                    "required_classes": c.required_classes,
+                    "points_reward": c.points_reward,
+                }
+                for c in rows
+            ]
+        }
+
+
+def enroll_in_challenge(user_id: str, challenge_title: str) -> dict:
+    """Enroll the user in an active challenge.
+
+    Args:
+        user_id: Authenticated user's id (string from JWT).
+        challenge_title: Challenge title (case-insensitive match).
+
+    Returns:
+        On success: ``{"success": True, "message": "Enrolled in [title]!"}``.
+        On failure: ``{"success": False, "message": "..."}``.
+    """
+    with app.app_context():
+        title = (challenge_title or "").strip()
+        if not title:
+            return {"success": False, "message": "Challenge not found or inactive."}
+
+        challenge = Challenge.query.filter(
+            Challenge.is_active.is_(True),
+            Challenge.title.ilike(title),
+        ).first()
+        if not challenge:
+            return {"success": False, "message": "Challenge not found or inactive."}
+
+        existing = Enrollment.query.filter_by(
+            user_id=user_id, challenge_id=challenge.id
+        ).first()
+        if existing:
+            return {"success": False, "message": "Already enrolled in this challenge."}
+
+        enrollment = Enrollment(
+            user_id=user_id,
+            challenge_id=challenge.id,
+            classes_completed=0,
+            status="active",
+        )
+        db.session.add(enrollment)
+        db.session.commit()
+        return {
+            "success": True,
+            "message": f"Enrolled in {challenge.title}!",
+        }
+
+
+def log_class_for_challenge(user_id: str, challenge_title: str) -> dict:
+    """Log one completed class toward the user's enrollment for a challenge.
+
+    Args:
+        user_id: Authenticated user's id (string from JWT).
+        challenge_title: Challenge title (case-insensitive match).
+
+    Returns:
+        On success: ``{"success": True, "classes_completed": int, "completed": bool, "points_earned": int}``.
+        On failure: ``{"success": False, "message": "..."}``.
+    """
+    with app.app_context():
+        title = (challenge_title or "").strip()
+        if not title:
+            return {"success": False, "message": "Challenge not found"}
+
+        challenge = Challenge.query.filter(Challenge.title.ilike(title)).first()
+        if not challenge:
+            return {"success": False, "message": "Challenge not found"}
+
+        enrollment = Enrollment.query.filter_by(
+            user_id=user_id, challenge_id=challenge.id
+        ).first()
+        if not enrollment:
+            return {"success": False, "message": "Not enrolled in this challenge."}
+
+        if enrollment.status == "completed":
+            return {"success": False, "message": "Challenge already completed."}
+
+        enrollment.classes_completed += 1
+        completed = False
+        points_earned = 0
+        if enrollment.classes_completed >= challenge.required_classes:
+            enrollment.status = "completed"
+            completed = True
+            points_earned = challenge.points_reward
+            txn = PointTxn(
+                user_id=user_id,
+                delta=points_earned,
+                reason=f"Completed: {challenge.title}",
+            )
+            db.session.add(txn)
+
+        db.session.commit()
+        return {
+            "success": True,
+            "classes_completed": enrollment.classes_completed,
+            "completed": completed,
+            "points_earned": points_earned,
+        }
+
+
+def get_available_rewards(user_id: str) -> dict:
+    """List active rewards the user can afford with their current balance.
+
+    Args:
+        user_id: Authenticated user's id (string from JWT).
+
+    Returns:
+        dict with key ``rewards``: list of dicts with id, title, points_cost.
+    """
+    with app.app_context():
+        balance = (
+            db.session.query(func.sum(PointTxn.delta)).filter_by(user_id=user_id).scalar()
+            or 0
+        )
+        rewards = Reward.query.filter_by(is_active=True).all()
+        affordable = [
+            {
+                "id": r.id,
+                "title": r.title,
+                "points_cost": r.points_cost,
+            }
+            for r in rewards
+            if r.points_cost <= balance
+        ]
+        return {"rewards": affordable}
+
+
+def redeem_reward_for_user(user_id: str, reward_title: str) -> dict:
+    """Redeem a reward: creates a redemption record and deducts points.
+
+    Args:
+        user_id: Authenticated user's id (string from JWT).
+        reward_title: Reward title (case-insensitive match).
+
+    Returns:
+        On success: ``{"success": True, "code": str, "reward_title": str}``.
+        On failure: ``{"success": False, "message": "..."}``.
+    """
+    with app.app_context():
+        balance = (
+            db.session.query(func.sum(PointTxn.delta)).filter_by(user_id=user_id).scalar()
+            or 0
+        )
+        title = (reward_title or "").strip()
+        if not title:
+            return {"success": False, "message": "Reward not found or inactive."}
+
+        reward = Reward.query.filter(
+            Reward.is_active.is_(True),
+            Reward.title.ilike(title),
+        ).first()
+        if not reward:
+            return {"success": False, "message": "Reward not found or inactive."}
+
+        if balance < reward.points_cost:
+            return {"success": False, "message": "Insufficient points."}
+
+        code = str(uuid.uuid4())
+        redemption = Redemption(user_id=user_id, reward_id=reward.id, code=code)
+        txn = PointTxn(
+            user_id=user_id,
+            delta=-reward.points_cost,
+            reason=f"Redeemed: {reward.title}",
+        )
+        db.session.add(redemption)
+        db.session.add(txn)
+        db.session.commit()
+        return {"success": True, "code": code, "reward_title": reward.title}
+
+
+GEMINI_CHAT_TOOLS = [
+    get_user_balance,
+    get_user_challenges,
+    list_available_challenges,
+    enroll_in_challenge,
+    log_class_for_challenge,
+    get_available_rewards,
+    redeem_reward_for_user,
+]
+
+
+def _chat_history_to_contents(history, latest_user_message: str):
+    """Build Gemini ``contents`` from client history plus the new user turn."""
+    contents = []
+    if isinstance(history, list):
+        for item in history:
+            if not isinstance(item, dict):
+                continue
+            role = item.get("role")
+            text = item.get("text")
+            if role not in ("user", "model") or text is None:
+                continue
+            text = str(text).strip()
+            if not text:
+                continue
+            contents.append(
+                types.Content(
+                    role=role,
+                    parts=[types.Part(text=text)],
+                )
+            )
+    text = str(latest_user_message).strip()
+    if text:
+        contents.append(
+            types.Content(
+                role="user",
+                parts=[types.Part(text=text)],
+            )
+        )
+    return contents
+
+
+@app.route('/api/chat', methods=['POST'])
+@jwt_required()
+def chat():
+    """Chat endpoint with Gemini AI using automatic tool calling (read + actions)."""
+    data = request.get_json() or {}
+    message = data.get("message")
+    history = data.get("history")
+
+    if not message or not str(message).strip():
+        return jsonify({"error": "message is required"}), 400
+
+    if history is not None and not isinstance(history, list):
+        return jsonify({"error": "history must be an array when provided"}), 400
+
+    contents = _chat_history_to_contents(history or [], message)
+    if not contents:
+        return jsonify({"error": "message is required"}), 400
+
+    user_id = get_jwt_identity()
+    system_instruction = CHAT_SYSTEM_INSTRUCTION.format(
+        authenticated_user_id=user_id
+    )
+
     try:
-        # Create client
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-        # Generate content with tools
         response = client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=message,
+            contents=contents,
             config=types.GenerateContentConfig(
-                system_instruction="You are a friendly Kashé fitness coach. Kashé is a fitness loyalty app where users earn points by completing class challenges and redeem them for rewards. You have tools to look up the user's real point balance and challenge progress. Always use these tools to give accurate personalized responses. Be encouraging and brief.",
-                tools=[get_user_balance, get_user_challenges],
-            )
+                system_instruction=system_instruction,
+                tools=GEMINI_CHAT_TOOLS,
+            ),
         )
 
         return jsonify({"reply": response.text}), 200

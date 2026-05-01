@@ -13,7 +13,7 @@ function Login({ setIsAuthenticated }) {
       const response = await fetch('http://127.0.0.1:5000/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({ email: email.trim(), password })
       });
       const data = await response.json();
       if (response.ok) {
@@ -36,7 +36,14 @@ function Login({ setIsAuthenticated }) {
       <div className="auth-card">
         <h1>Login to Kashé</h1>
         <form onSubmit={handleSubmit}>
-          <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          <input
+            type="text"
+            autoComplete="username"
+            placeholder="Email or name"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
           <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required />
           <button type="submit">Login</button>
         </form>
