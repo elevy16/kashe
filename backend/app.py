@@ -18,6 +18,10 @@ from models import Challenge, Enrollment, PointTxn, Reward, Redemption, User
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from flask_cors import CORS
 
+import firebase_admin
+from firebase_admin import auth as firebase_auth
+from firebase_admin import credentials as firebase_credentials
+
 
 _BACKEND_DIR = Path(__file__).resolve().parent
 _INSTANCE_DIR = _BACKEND_DIR / "instance"
@@ -27,7 +31,13 @@ _DEFAULT_SQLITE_URI = "sqlite:///" + (_INSTANCE_DIR / "kashe_dev.db").resolve().
 
 app = Flask(__name__)
 
-CORS(app, origins=["http://localhost:5173"])
+CORS(
+    app,
+    origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+)
 
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
     "DATABASE_URL", _DEFAULT_SQLITE_URI
@@ -47,6 +57,24 @@ import models  # noqa: F401
 # Ensure tables are created on startup
 with app.app_context():
     db.create_all()
+
+
+def _ensure_firebase_admin():
+    if firebase_admin._apps:
+        return True
+    cred_path = (
+        os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        or os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH")
+    )
+    path = Path(cred_path).expanduser() if cred_path else None
+    if not path or not path.is_file():
+        default_json = _BACKEND_DIR / "serviceAccount.json"
+        if default_json.is_file():
+            path = default_json
+        else:
+            return False
+    firebase_admin.initialize_app(firebase_credentials.Certificate(str(path)))
+    return True
 
 
 @app.route("/", methods=["GET"])
@@ -110,6 +138,54 @@ def login():
         "name": user.name,
         "email": user.email,
         "created_at": user.created_at.isoformat()
+    }), 200
+
+
+@app.route("/api/auth/google", methods=["POST"])
+def auth_google():
+    firebase_id_token = (request.get_json() or {}).get("token") or ""
+    if not firebase_id_token:
+        return jsonify({"error": "token is required"}), 400
+
+    if not _ensure_firebase_admin():
+        return jsonify(
+            {
+                "error": "Google sign-in is not configured. Place serviceAccount.json in the "
+                "backend folder, or set GOOGLE_APPLICATION_CREDENTIALS / FIREBASE_SERVICE_ACCOUNT_PATH "
+                "to your Firebase service account JSON file.",
+            }
+        ), 503
+
+    try:
+        decoded = firebase_auth.verify_id_token(firebase_id_token)
+    except Exception:
+        return jsonify({"error": "Invalid or expired Google token."}), 401
+
+    email = (decoded.get("email") or "").strip().lower()
+    if not email:
+        return jsonify({"error": "Google account has no email on file."}), 400
+
+    display_name = (decoded.get("name") or "").strip()
+    if not display_name:
+        local = email.split("@")[0]
+        display_name = local.replace(".", " ").title() if local else "Member"
+
+    user = models.User.query.filter(func.lower(models.User.email) == email).first()
+    if not user:
+        random_pw = uuid.uuid4().hex
+        user = models.User(
+            name=display_name,
+            email=email,
+            password_hash=generate_password_hash(random_pw),
+        )
+        db.session.add(user)
+        db.session.commit()
+    token = create_access_token(identity=str(user.id))
+    return jsonify({
+        "token": token,
+        "name": user.name,
+        "email": user.email,
+        "created_at": user.created_at.isoformat(),
     }), 200
 
 
