@@ -8,7 +8,7 @@ from pathlib import Path
 from flask import Flask, jsonify, request
 from flask_jwt_extended import create_access_token
 from werkzeug.security import check_password_hash, generate_password_hash
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from google import genai
 from google.genai import types
 
@@ -300,6 +300,103 @@ def checkin():
         "completed": completed,
         "points_earned": points_earned
     })
+
+
+@app.route("/api/webhook/mindbody", methods=["POST"])
+def mindbody_webhook():
+    """Simulated MindBody attendance webhook (no JWT)."""
+    data = request.get_json() or {}
+    mindbody_email = (data.get("mindbody_email") or "").strip().lower()
+    class_name = (data.get("class_name") or "").strip()
+    _studio_name = (data.get("studio_name") or "").strip()
+    _attended_at = data.get("attended_at")
+
+    if not mindbody_email or not class_name:
+        return jsonify(
+            {
+                "success": False,
+                "message": "mindbody_email and class_name are required",
+            }
+        ), 400
+
+    user = models.User.query.filter(
+        or_(
+            func.lower(models.User.email) == mindbody_email,
+            and_(
+                models.User.mindbody_email.isnot(None),
+                func.lower(models.User.mindbody_email) == mindbody_email,
+            ),
+        )
+    ).first()
+    if not user:
+        return jsonify({"success": False, "message": "User not found"}), 200
+
+    # Partial match: challenge title contains class_name (case insensitive)
+    pattern = f"%{class_name.replace('%', '').replace('_', '')}%"
+    enrollment = (
+        Enrollment.query.join(Challenge, Enrollment.challenge_id == Challenge.id)
+        .filter(
+            Enrollment.user_id == user.id,
+            Enrollment.status == "active",
+            Challenge.title.ilike(pattern),
+        )
+        .first()
+    )
+    if not enrollment:
+        return jsonify(
+            {
+                "success": False,
+                "message": "No matching challenge enrollment found",
+            }
+        ), 200
+
+    challenge = Challenge.query.get(enrollment.challenge_id)
+    if not challenge:
+        return jsonify(
+            {"success": False, "message": "No matching challenge enrollment found"}
+        ), 200
+
+    enrollment.classes_completed += 1
+    message = f"Logged attendance for {challenge.title}."
+    if enrollment.classes_completed >= challenge.required_classes:
+        enrollment.status = "completed"
+        txn = PointTxn(
+            user_id=user.id,
+            delta=challenge.points_reward,
+            reason=f"Completed: {challenge.title}",
+        )
+        db.session.add(txn)
+        message = f"Completed challenge: {challenge.title}."
+
+    db.session.commit()
+    return jsonify(
+        {
+            "success": True,
+            "message": message,
+            "classes_completed": enrollment.classes_completed,
+        }
+    ), 200
+
+
+@app.route("/api/webhook/mindbody/status", methods=["GET"])
+@jwt_required()
+def mindbody_webhook_status():
+    """Recent point transactions (e.g. after MindBody webhook simulation)."""
+    rows = (
+        PointTxn.query.order_by(PointTxn.created_at.desc()).limit(10).all()
+    )
+    return jsonify(
+        {
+            "recent_point_txns": [
+                {
+                    "reason": t.reason,
+                    "delta": t.delta,
+                    "created_at": t.created_at.isoformat() if t.created_at else None,
+                }
+                for t in rows
+            ]
+        }
+    )
 
 
 @app.route('/api/rewards', methods=['GET'])
