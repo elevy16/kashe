@@ -5,6 +5,15 @@ import { auth, GoogleAuthProvider } from '../firebase';
 
 const googleProvider = new GoogleAuthProvider();
 
+function clearChatHistoryOnNewLogin() {
+  try {
+    sessionStorage.removeItem('kashe_chat_history');
+    sessionStorage.removeItem('kashe_pending_log_challenge');
+  } catch {
+    // ignore
+  }
+}
+
 function Login({ setIsAuthenticated }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -22,6 +31,7 @@ function Login({ setIsAuthenticated }) {
       });
       const data = await response.json();
       if (response.ok) {
+        clearChatHistoryOnNewLogin();
         localStorage.setItem('token', data.token);
         localStorage.setItem('name', data.name);
         localStorage.setItem('email', data.email);
@@ -49,6 +59,7 @@ function Login({ setIsAuthenticated }) {
       });
       const data = await response.json();
       if (response.ok) {
+        clearChatHistoryOnNewLogin();
         localStorage.setItem('token', data.token);
         localStorage.setItem('name', data.name);
         localStorage.setItem('email', data.email);

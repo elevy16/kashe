@@ -49,6 +49,12 @@ function Register({ setIsAuthenticated }) {
       });
       const data = await response.json();
       if (response.ok) {
+        try {
+          sessionStorage.removeItem('kashe_chat_history');
+          sessionStorage.removeItem('kashe_pending_log_challenge');
+        } catch {
+          // ignore
+        }
         localStorage.setItem('token', data.token);
         localStorage.setItem('name', data.name);
         localStorage.setItem('email', data.email);
