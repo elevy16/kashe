@@ -1,8 +1,12 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+import json
 import os
+import re
 import uuid
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from flask import Flask, jsonify, request
@@ -464,9 +468,132 @@ def get_lifetime_points():
 
 # --- Gemini chat tools (read + action). DB access runs inside app.app_context(). ---
 
+GREETING_SYSTEM_INSTRUCTION = (
+    "Generate a short, personalized, encouraging opening message "
+    "for a Kashé fitness coach chatbot. Be specific about the "
+    "user's actual progress. Mention something actionable. "
+    "Keep it to 2 sentences max. No markdown. Be warm and motivating."
+)
+
+
+def _build_activity_summary(user_id: str) -> dict:
+    """Build activity summary dict for chat context, tools, and greetings (expects app context)."""
+    uid = int(user_id)
+    balance = (
+        db.session.query(func.sum(PointTxn.delta)).filter_by(user_id=uid).scalar() or 0
+    )
+
+    enrollments_out = []
+    for enrollment in Enrollment.query.filter_by(user_id=uid).all():
+        challenge = db.session.get(Challenge, enrollment.challenge_id)
+        if not challenge:
+            continue
+        enrollments_out.append(
+            {
+                "title": challenge.title,
+                "classes_completed": enrollment.classes_completed,
+                "required_classes": challenge.required_classes,
+                "points_reward": challenge.points_reward,
+                "status": enrollment.status,
+            }
+        )
+
+    recent_txns = (
+        PointTxn.query.filter_by(user_id=uid)
+        .order_by(PointTxn.created_at.desc())
+        .limit(5)
+        .all()
+    )
+    recent_point_txns = [
+        {
+            "reason": t.reason,
+            "delta": t.delta,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+        }
+        for t in recent_txns
+    ]
+
+    seven_ago = datetime.utcnow() - timedelta(days=7)
+
+    challenges_completed_last_7_days = []
+    for txn in (
+        PointTxn.query.filter(
+            PointTxn.user_id == uid,
+            PointTxn.delta > 0,
+            PointTxn.created_at >= seven_ago,
+            PointTxn.reason.isnot(None),
+            PointTxn.reason.like("Completed:%"),
+        )
+        .order_by(PointTxn.created_at.desc())
+        .all()
+    ):
+        title = (txn.reason or "").replace("Completed:", "").strip()
+        challenges_completed_last_7_days.append(
+            {
+                "title": title,
+                "points_earned": txn.delta,
+                "completed_at": txn.created_at.isoformat() if txn.created_at else None,
+            }
+        )
+
+    rewards_redeemed_last_7_days = []
+    for redemption in (
+        Redemption.query.filter(
+            Redemption.user_id == uid,
+            Redemption.redeemed_at >= seven_ago,
+        )
+        .order_by(Redemption.redeemed_at.desc())
+        .all()
+    ):
+        reward = db.session.get(Reward, redemption.reward_id)
+        rewards_redeemed_last_7_days.append(
+            {
+                "reward_title": reward.title if reward else "",
+                "redeemed_at": redemption.redeemed_at.isoformat()
+                if redemption.redeemed_at
+                else None,
+            }
+        )
+
+    return {
+        "balance": int(balance),
+        "enrollments": enrollments_out,
+        "recent_point_txns": recent_point_txns,
+        "challenges_completed_last_7_days": challenges_completed_last_7_days,
+        "rewards_redeemed_last_7_days": rewards_redeemed_last_7_days,
+    }
+
+
 CHAT_SYSTEM_INSTRUCTION = """You are an action-oriented Kashé fitness coach and assistant.
 Kashé is a fitness loyalty app where users earn points by completing
 class challenges and redeem them for rewards.
+
+You know boutique fitness: studios like SoulCycle, Club Pilates, CorePower Yoga,
+Pure Barre, Barry's, and similar venues, plus common class types including HIIT,
+Pilates, Barre, Yoga, Strength, and cardio-forward formats.
+
+When the user asks what they should do next, or wants a recommendation, use their
+current enrollments and progress (from your tools) to suggest they prioritize the
+challenge they are closest to completing first, then others.
+
+After you successfully log a class for them, check if they are now within one or
+two classes of finishing that challenge and mention it when relevant.
+
+After they complete a challenge, mention which rewards they can now afford. Kashé
+rewards include real partner brands such as Pressed Juicery, Lululemon, SoulCycle,
+Alo Yoga, Spotify Premium, and Sakara Life when naming options.
+
+After they redeem a reward, congratulate them and suggest a challenge to work
+toward next.
+
+Never ask for numeric IDs for challenges or rewards. Always use names.
+
+When matching challenge names from user messages, always use case-insensitive
+matching. If the user types 'pilates powerhouse' or 'Pilates Powerhouse' or
+'PILATES POWERHOUSE', treat them all the same. Never fail to recognize a challenge
+name just because of capitalization.
+
+Keep responses concise, warm, and action-oriented.
 
 CRITICAL RULES:
 - When a user confirms they want to do something, IMMEDIATELY call
@@ -477,14 +604,32 @@ CRITICAL RULES:
 - Never say 'I'll log a class' without actually calling log_class_for_challenge.
 - Never say 'I'll redeem' without actually calling redeem_reward_for_user.
 - After calling a tool, report the result to the user.
+- Use get_user_activity_summary when you need a full snapshot of recent activity,
+  balance, enrollments, point history, and weekly completions and redemptions.
 
 You have tools to look up data AND take real actions.
 For logging a class, just do it directly without asking.
+Phrasings like "log a class for pilates powerhouse", "Log a class for Pilates Powerhouse",
+"record a class toward barre basics", or "please log my class for cardio crush" all mean
+the same intent: call log_class_for_challenge immediately with the challenge name the user
+gave. Do this for any capitalization or minor wording variation. The tool matches
+challenge names case-insensitively, so never skip calling it because the user used lowercase.
+
 For enrolling and redeeming, confirm once then immediately act.
 Be encouraging, brief, and action-oriented.
 
 Never use markdown formatting like **bold** or *bullets*
 in your responses. Use plain text only.
+
+Never reply with apologies like "sorry, I didn't understand". If unsure, steer the
+user toward Kashé: logging classes toward challenges, enrolling, checking balance,
+or redeeming rewards (Pressed Juicery, Lululemon, SoulCycle, Alo Yoga, Sakara Life, Spotify).
+
+When the user confirms yes after seeing an offer to enroll before logging a class,
+they want you to enroll them and log the same class immediately.
+
+If a tool explains that the challenge or reward wasn't found but lists alternatives,
+reuse that detail verbatim for the user.
 
 The authenticated user's ID is: {authenticated_user_id}"""
 
@@ -504,6 +649,21 @@ def get_user_balance(user_id: str) -> dict:
             or 0
         )
         return {"balance": balance}
+
+
+def get_user_activity_summary(user_id: str) -> dict:
+    """Summarize recent user activity: enrollments, recent PointTxns, balance,
+    challenges completed in the last 7 days, rewards redeemed in the last 7 days.
+
+    Args:
+        user_id: Authenticated user's id (string from JWT).
+
+    Returns:
+        dict with keys: balance, enrollments, recent_point_txns,
+        challenges_completed_last_7_days, rewards_redeemed_last_7_days.
+    """
+    with app.app_context():
+        return _build_activity_summary(user_id)
 
 
 def get_user_challenges(user_id: str) -> dict:
@@ -566,34 +726,222 @@ def list_available_challenges(user_id: str) -> dict:
         }
 
 
+def _alnum_compact(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def _spaced_normalized(text: str) -> str:
+    return re.sub(
+        r"\s+",
+        " ",
+        re.sub(r"[^a-z0-9]+", " ", (text or "").lower()),
+    ).strip()
+
+
+def _title_tokens(title: str) -> list:
+    return re.findall(r"[a-z0-9]+", (title or "").lower())
+
+
+def _rank_challenges_by_fragment(fragment: str, challenges: list) -> list:
+    """Return ``[(challenge, score), ...]`` best first.
+
+    Score counts title words (len>=2) found as substrings of the user's compact
+    string (handles fused typos like flowjourney). Exact compact / spaced matches win.
+    """
+    fragment = (fragment or "").strip()
+    if not fragment:
+        return []
+
+    user_c = _alnum_compact(fragment)
+    user_s = _spaced_normalized(fragment)
+    ranked = []
+    for ch in challenges:
+        words = _title_tokens(ch.title)
+        if not words:
+            continue
+        ch_c = "".join(words)
+        ch_s = _spaced_normalized(ch.title)
+        exact = user_c == ch_c or user_s == ch_s
+        score = sum(1 for w in words if len(w) >= 2 and w in user_c)
+        if exact:
+            score = max(score, len(words) + 1)
+        ranked.append((ch, score))
+
+    ranked.sort(key=lambda t: (-(t[1]), len(t[0].title)))
+    return ranked
+
+
+def resolve_challenge_for_enroll(fragment: str):
+    """Best active Challenge for enroll intent, or None."""
+    fragment = (fragment or "").strip()
+    if not fragment:
+        return None
+    rows = Challenge.query.filter(Challenge.is_active.is_(True)).all()
+    if not rows:
+        return None
+    ranked = _rank_challenges_by_fragment(fragment, rows)
+    if not ranked:
+        return None
+    best_score = ranked[0][1]
+    if best_score == 0:
+        return None
+    return ranked[0][0]
+
+
+def resolve_challenge_for_log(user_id: str, fragment: str):
+    """Resolve challenge for logging: prefers enrollments user has."""
+    fragment = (fragment or "").strip()
+    if not fragment:
+        return None, []
+    enrolled_ids = (
+        db.session.query(Enrollment.challenge_id)
+        .filter_by(user_id=int(user_id))
+        .distinct()
+        .all()
+    )
+    enrolled_set = {r[0] for r in enrolled_ids}
+
+    pool = Challenge.query.all()
+    ranked_plain = _rank_challenges_by_fragment(fragment, pool)
+    enrolled_first = []
+    for row in ranked_plain:
+        ch = row[0]
+        score = row[1]
+        if ch.id in enrolled_set:
+            enrolled_first.append((ch, score))
+    enrolled_first.sort(key=lambda t: -t[1])
+    ranked_plain_sorted = sorted(ranked_plain, key=lambda t: (-t[1], len(t[0].title)))
+
+    if enrolled_first and enrolled_first[0][1] > 0:
+        return enrolled_first[0][0], ranked_plain_sorted
+    if ranked_plain_sorted and ranked_plain_sorted[0][1] > 0:
+        return ranked_plain_sorted[0][0], ranked_plain_sorted
+    return None, ranked_plain_sorted
+
+
+def resolve_reward_by_fragment(fragment: str):
+    """Best active Reward match for redeem intent."""
+    fragment = (fragment or "").strip()
+    if not fragment:
+        return None
+    rows = Reward.query.filter(Reward.is_active.is_(True)).all()
+    if not rows:
+        return None
+    user_c = _alnum_compact(fragment)
+    user_s = _spaced_normalized(fragment)
+    best = None
+    best_score = -1
+    for r in rows:
+        words = _title_tokens(r.title)
+        if not words:
+            continue
+        r_c = "".join(words)
+        r_s = _spaced_normalized(r.title)
+        exact = user_c == r_c or user_s == r_s
+        score = sum(1 for w in words if len(w) >= 2 and w in user_c)
+        if exact:
+            score = max(score, len(words) + 1)
+        if score > best_score:
+            best_score = score
+            best = r
+    if best_score <= 0:
+        return None
+    return best
+
+
+def _format_available_challenges_for_user(user_id: str) -> str:
+    data = list_available_challenges(user_id)
+    chals = data.get("challenges") or []
+    if not chals:
+        return "You are already enrolled in every challenge we have right now. Log classes toward your active challenges to earn points, or ask me how close you are to finishing one."
+    lines = ", ".join(c["title"] for c in chals[:12])
+    more = f" (and {len(chals) - 12} more)" if len(chals) > 12 else ""
+    return f"Here are challenges you can still join: {lines}{more}."
+
+
+def _fastest_points_path(user_id: str, points_needed: int) -> str:
+    """Coach-style hint: gap + best challenge completion to cite."""
+    uid = int(user_id)
+    gap = max(int(points_needed), 1)
+    first = (
+        f"You need {gap} more point{'s' if gap != 1 else ''}"
+        if gap
+        else "You could use more points toward that reward."
+    )
+
+    feasible = []
+    for e in Enrollment.query.filter_by(user_id=uid, status="active").all():
+        ch = db.session.get(Challenge, e.challenge_id)
+        if not ch:
+            continue
+        rem = max(ch.required_classes - e.classes_completed, 0)
+        if rem <= 0:
+            continue
+        pts = ch.points_reward
+        if pts >= gap:
+            feasible.append((rem, pts, ch.title))
+
+    feasible.sort(key=lambda t: (t[0], -t[1]))
+    if feasible:
+        rem, pts, title = feasible[0]
+        return f"{first}. Completing {title} would earn you {pts} points{f' — only {rem} class(es) away' if rem else ''}!"
+
+    best = []
+    for e in Enrollment.query.filter_by(user_id=uid, status="active").all():
+        ch = db.session.get(Challenge, e.challenge_id)
+        if not ch:
+            continue
+        rem = max(ch.required_classes - e.classes_completed, 0)
+        if rem <= 0:
+            continue
+        best.append((ch.points_reward / max(rem, 1), rem, ch.points_reward, ch.title))
+    best.sort(key=lambda t: (-t[0], t[1]))
+    if best:
+        _, rem, pts, title = best[0]
+        return f"{first}. Working toward finishing {title} earns {pts} points with {rem} class(es) to go."
+
+    avail = Challenge.query.filter(Challenge.is_active.is_(True)).count()
+    if avail:
+        return f"{first}. Enrolling in an open challenge and finishing it is your fastest route to stacking points."
+
+    return f"{first}. Enroll in any open challenge — each completion unlocks Kashé rewards."
+
+
 def enroll_in_challenge(user_id: str, challenge_title: str) -> dict:
-    """Enroll the user in an active challenge.
+    """Enroll the user in an active challenge (fuzzy title match).
 
     Args:
         user_id: Authenticated user's id (string from JWT).
-        challenge_title: Challenge title (case-insensitive match).
+        challenge_title: Challenge title from the user; normalized and fuzzy-matched.
 
     Returns:
-        On success: ``{"success": True, "message": "Enrolled in [title]!"}``.
-        On failure: ``{"success": False, "message": "..."}``.
+        On success: ``{"success": True, "message": "..."}``.
+        On failure: ``{"success": False, "message": "...", ...}``.
     """
     with app.app_context():
-        title = (challenge_title or "").strip()
-        if not title:
-            return {"success": False, "message": "Challenge not found or inactive."}
+        fragment = (challenge_title or "").strip()
+        if not fragment:
+            return {
+                "success": False,
+                "message": "Tell me which challenge you want to join by name.",
+            }
 
-        challenge = Challenge.query.filter(
-            Challenge.is_active.is_(True),
-            Challenge.title.ilike(title),
-        ).first()
+        challenge = resolve_challenge_for_enroll(fragment)
         if not challenge:
-            return {"success": False, "message": "Challenge not found or inactive."}
+            hint = _format_available_challenges_for_user(user_id)
+            return {
+                "success": False,
+                "message": f"I could not find a challenge called {fragment!r}. {hint}",
+            }
 
         existing = Enrollment.query.filter_by(
             user_id=user_id, challenge_id=challenge.id
         ).first()
         if existing:
-            return {"success": False, "message": "Already enrolled in this challenge."}
+            return {
+                "success": False,
+                "message": f"You are already enrolled in {challenge.title}.",
+            }
 
         enrollment = Enrollment(
             user_id=user_id,
@@ -606,6 +954,7 @@ def enroll_in_challenge(user_id: str, challenge_title: str) -> dict:
         return {
             "success": True,
             "message": f"Enrolled in {challenge.title}!",
+            "challenge_title": challenge.title,
         }
 
 
@@ -614,29 +963,40 @@ def log_class_for_challenge(user_id: str, challenge_title: str) -> dict:
 
     Args:
         user_id: Authenticated user's id (string from JWT).
-        challenge_title: Challenge title (case-insensitive match).
+        challenge_title: Challenge title fragment; fuzzy-matched to challenges.
 
     Returns:
-        On success: ``{"success": True, "classes_completed": int, "completed": bool, "points_earned": int}``.
-        On failure: ``{"success": False, "message": "..."}``.
+        On success: ``{"success": True, ...}``.
+        On failure: includes ``reason`` when machine-readable (``not_enrolled``,
+        ``not_found``, ``already_completed``).
     """
     with app.app_context():
-        title = (challenge_title or "").strip()
-        if not title:
-            return {"success": False, "message": "Challenge not found"}
+        fragment = (challenge_title or "").strip()
+        if not fragment:
+            return {"success": False, "message": "Challenge not found", "reason": "not_found"}
 
-        challenge = Challenge.query.filter(Challenge.title.ilike(title)).first()
+        challenge, _alts = resolve_challenge_for_log(user_id, fragment)
         if not challenge:
-            return {"success": False, "message": "Challenge not found"}
+            return {"success": False, "message": "Challenge not found", "reason": "not_found"}
 
         enrollment = Enrollment.query.filter_by(
             user_id=user_id, challenge_id=challenge.id
         ).first()
         if not enrollment:
-            return {"success": False, "message": "Not enrolled in this challenge."}
+            return {
+                "success": False,
+                "message": f"Not enrolled in {challenge.title}.",
+                "reason": "not_enrolled",
+                "challenge_title": challenge.title,
+            }
 
         if enrollment.status == "completed":
-            return {"success": False, "message": "Challenge already completed."}
+            return {
+                "success": False,
+                "message": f"You already completed {challenge.title}.",
+                "reason": "already_completed",
+                "challenge_title": challenge.title,
+            }
 
         enrollment.classes_completed += 1
         completed = False
@@ -658,6 +1018,7 @@ def log_class_for_challenge(user_id: str, challenge_title: str) -> dict:
             "classes_completed": enrollment.classes_completed,
             "completed": completed,
             "points_earned": points_earned,
+            "challenge_title": challenge.title,
         }
 
 
@@ -693,30 +1054,49 @@ def redeem_reward_for_user(user_id: str, reward_title: str) -> dict:
 
     Args:
         user_id: Authenticated user's id (string from JWT).
-        reward_title: Reward title (case-insensitive match).
+        reward_title: Reward fragment; fuzzy matched to titles.
 
     Returns:
         On success: ``{"success": True, "code": str, "reward_title": str}``.
-        On failure: ``{"success": False, "message": "..."}``.
+        On failure: ``{"success": False, "message": "...", ...}`` may include ``reason``.
     """
     with app.app_context():
         balance = (
             db.session.query(func.sum(PointTxn.delta)).filter_by(user_id=user_id).scalar()
             or 0
         )
-        title = (reward_title or "").strip()
-        if not title:
-            return {"success": False, "message": "Reward not found or inactive."}
+        fragment = (reward_title or "").strip()
+        if not fragment:
+            return {"success": False, "message": "Tell me which reward you want."}
 
-        reward = Reward.query.filter(
-            Reward.is_active.is_(True),
-            Reward.title.ilike(title),
-        ).first()
+        reward = resolve_reward_by_fragment(fragment)
         if not reward:
-            return {"success": False, "message": "Reward not found or inactive."}
+            rows = Reward.query.filter_by(is_active=True).all()
+            names = ", ".join(r.title for r in rows[:10])
+            suffix = " … and more!" if len(rows) > 10 else ""
+            return {
+                "success": False,
+                "reason": "reward_not_found",
+                "message": (
+                    f"I could not match a reward called {fragment!r}. Rewards in Kashé "
+                    f"right now include: {names}{suffix}."
+                ),
+            }
 
+        balance = int(balance)
         if balance < reward.points_cost:
-            return {"success": False, "message": "Insufficient points."}
+            need = reward.points_cost - balance
+            hint = _fastest_points_path(user_id, need)
+            msg = hint
+            return {
+                "success": False,
+                "reason": "insufficient_points",
+                "reward_title": reward.title,
+                "points_needed": need,
+                "reward_cost": reward.points_cost,
+                "balance": balance,
+                "message": msg,
+            }
 
         code = str(uuid.uuid4())
         redemption = Redemption(user_id=user_id, reward_id=reward.id, code=code)
@@ -733,6 +1113,7 @@ def redeem_reward_for_user(user_id: str, reward_title: str) -> dict:
 
 GEMINI_CHAT_TOOLS = [
     get_user_balance,
+    get_user_activity_summary,
     get_user_challenges,
     list_available_challenges,
     enroll_in_challenge,
@@ -740,6 +1121,20 @@ GEMINI_CHAT_TOOLS = [
     get_available_rewards,
     redeem_reward_for_user,
 ]
+
+
+KASHE_CHAT_HELP_PROMPT = (
+    "I can help you log classes, check your points, enroll in challenges, "
+    "or redeem rewards. What would you like?"
+)
+
+KASHE_CHAT_TECH_BLIP = (
+    "Kashé hit a brief hiccup with the AI backend. You can still tell me to log a "
+    "class by challenge name, redeem a reward by name, or ask about your progress. "
+    "What should we do?"
+)
+
+GEMINI_CHAT_GENERATE_TIMEOUT_SEC = 75.0
 
 
 def _chat_history_to_contents(history, latest_user_message: str):
@@ -773,10 +1168,245 @@ def _chat_history_to_contents(history, latest_user_message: str):
     return contents
 
 
+def _normalize_challenge_name_fragment(raw: str) -> str:
+    """Collapse whitespace around a user-provided challenge phrase."""
+    return re.sub(r"\s+", " ", (raw or "").strip())
+
+
+def _looks_unhelpful_gemini_reply(reply: str) -> bool:
+    """True when the model gives an empty or generic unhelpful refusal."""
+    text = (reply or "").strip().lower()
+    if not text:
+        return True
+    needles = (
+        "sorry, i didn't understand",
+        "sorry, i did not understand",
+        "i'm sorry, i don't",
+        "i am sorry, i don't",
+        "i don't understand",
+        "didn't understand that",
+        "did not understand that",
+        "i'm not sure",
+        "i am not sure",
+        "can't help with that",
+        "cannot help with that",
+        "as an ai",
+        "i cannot assist",
+        "i can't assist",
+        "unable to help",
+    )
+    return any(n in text for n in needles)
+
+
+def _is_affirmative_message(message: str) -> bool:
+    """Short yes-style replies for pending enroll-then-log prompts."""
+    t = (message or "").strip().lower()
+    if not t or len(t) > 80:
+        return False
+    return bool(
+        re.match(
+            r"^(yes+|yeah+|yep+|sure+|ok+|okay+|y\b|\bplease\b|do\s+it|absolutely|\bfine\b|"
+            r"sounds?\s+good|go\s+ahead|that'?s\s+fine|that\s+is\s+fine|"
+            r"let'?s\s+do\s+it)([\s!.?,]|$)",
+            t,
+        )
+    )
+
+
+def _catalog_active_challenge_names() -> str:
+    rows = Challenge.query.filter(Challenge.is_active.is_(True)).order_by(Challenge.title).all()
+    return ", ".join(c.title for c in rows[:14]) if rows else "No open challenges right now."
+
+
+def _extract_log_class_challenge_title(message: str):
+    """Detect log-a-class intent; return normalized challenge name fragment or None."""
+    text = (message or "").strip()
+    if not text:
+        return None
+    patterns = (
+        r"log\s+(?:a\s+)?class\s+(?:for|on|toward|to|in)\s+(.+)",
+        r"(?:please\s+)?(?:can\s+you\s+)?(?:could\s+you\s+)?log\s+(?:a\s+)?class\s+(?:for|on|toward|to|in)\s+(.+)",
+        r"record\s+(?:a\s+)?class\s+(?:for|on|toward|to|in)\s+(.+)",
+        r"(?:add|count|credit)\s+(?:a\s+)?class\s+(?:for|on|toward|to|in)\s+(.+)",
+        r"(?:mark|check)\s+(?:a\s+)?class\s+(?:for|on|toward|to|in)\s+(.+)",
+        r"(?:i\s+)?(?:just\s+)?(?:finished|completed|did)\s+(?:a\s+)?class\s+(?:for|on|at|in)\s+(.+)",
+    )
+    for pat in patterns:
+        m = re.search(pat, text, re.I | re.S)
+        if not m:
+            continue
+        title = _normalize_challenge_name_fragment(m.group(1))
+        title = re.sub(
+            r"\s+(please|thanks|thank\s+you)[\s.!?,]*$",
+            "",
+            title,
+            flags=re.I,
+        ).strip()
+        title = title.strip().strip('"\'')
+        title = title.rstrip(".,;!?")
+        title = _normalize_challenge_name_fragment(title)
+        if title:
+            return title
+    return None
+
+
+def _extract_enroll_challenge_title(message: str):
+    """Detect enroll intent; return normalized challenge fragment."""
+    text = (message or "").strip()
+    if not text:
+        return None
+    patterns = (
+        r"enroll\s+(?:me\s+)?(?:in|into|for|on)\s+(.+)",
+        r"(?:sign|put)\s+(?:me\s+)?up\s+for\s+(.+)",
+        r"join\s+me\s+(?:for|in|on)\s+(.+)",
+        r"join\s+(.+)",
+        r"(?:register|add)\s+me\s+(?:for|in|on)\s+(.+)",
+    )
+    for pat in patterns:
+        m = re.search(pat, text, re.I | re.S)
+        if not m:
+            continue
+        title = _normalize_challenge_name_fragment(m.group(1)).rstrip(".,;!?\"'")
+        if title:
+            return title
+    return None
+
+
+def _extract_redeem_reward_title(message: str):
+    """Detect redeem intent; return normalized reward name fragment."""
+    text = (message or "").strip()
+    if not text:
+        return None
+    patterns = (
+        r"redeem\s+(?:my\s+)?(?:points\s+(?:for|on)\s+)?(.+)",
+        r"(?:cash\s+in|exchange)\s+(?:my\s+)?points\s+for\s+(.+)",
+        r"(?:claim|get)\s+(?:the\s+)?(?:reward\s+)?(?:for\s+)?(.+)",
+    )
+    for pat in patterns:
+        m = re.search(pat, text, re.I | re.S)
+        if not m:
+            continue
+        frag = _normalize_challenge_name_fragment(m.group(1)).rstrip(".,;!?\"'")
+        frag = re.sub(
+            r"\s+(please|thanks|thank\s+you)[\s.!?,]*$",
+            "",
+            frag,
+            flags=re.I,
+        ).strip()
+        if frag:
+            return frag
+    return None
+
+
+def _format_log_class_success_reply(result: dict, user_fragment: str) -> str:
+    title = result.get("challenge_title") or user_fragment
+    n = result.get("classes_completed", 0)
+    if result.get("completed"):
+        pts = result.get("points_earned", 0)
+        return (
+            f"Done — you finished {title}! You completed {n} classes and earned {pts} points. "
+            f"Check Rewards to see what you can redeem next."
+        )
+    return (
+        f"Logged one class toward {title}. You are now at {n} classes in this challenge. "
+        f"Keep going — you are getting closer to the finish line."
+    )
+
+
+@app.route("/api/chat/context", methods=["GET"])
+@jwt_required()
+def chat_context():
+    """Activity summary + first name for clients (e.g. opening message builders)."""
+    user_id = get_jwt_identity()
+    user = models.User.query.get(int(user_id))
+    first_name = ""
+    if user and user.name:
+        parts = user.name.strip().split()
+        first_name = parts[0] if parts else ""
+    summary = _build_activity_summary(user_id)
+    return jsonify({"first_name": first_name or "there", **summary}), 200
+
+
+@app.route("/api/chat/greeting", methods=["POST"])
+@jwt_required()
+def chat_greeting():
+    """Personalized opening line from Gemini using live user data."""
+    user_id = get_jwt_identity()
+    user = models.User.query.get(int(user_id))
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    summary = _build_activity_summary(user_id)
+    close_to_finish = []
+    for e in summary["enrollments"]:
+        if e.get("status") != "active":
+            continue
+        remaining = e["required_classes"] - e["classes_completed"]
+        if 0 < remaining <= 2:
+            close_to_finish.append(
+                {
+                    "title": e["title"],
+                    "classes_completed": e["classes_completed"],
+                    "required_classes": e["required_classes"],
+                    "classes_remaining": remaining,
+                }
+            )
+
+    balance = summary["balance"]
+    affordable = []
+    for r in Reward.query.filter_by(is_active=True).all():
+        if r.points_cost <= balance:
+            affordable.append({"title": r.title, "points_cost": r.points_cost})
+
+    payload = {
+        "user_full_name": user.name,
+        "balance_points": balance,
+        "enrollments": summary["enrollments"],
+        "challenges_close_to_completion": close_to_finish,
+        "recent_point_transactions": summary["recent_point_txns"],
+        "affordable_reward_titles": [x["title"] for x in affordable[:10]],
+    }
+    facts = json.dumps(payload, indent=2)
+    user_first = user.name.strip().split()[0] if user.name else "there"
+
+    try:
+        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part(
+                            text=(
+                                "Here is the user's live Kashé data. "
+                                "Write only the opening message per your instructions.\n\n"
+                                + facts
+                            )
+                        )
+                    ],
+                )
+            ],
+            config=types.GenerateContentConfig(
+                system_instruction=GREETING_SYSTEM_INSTRUCTION,
+            ),
+        )
+        greeting = (response.text or "").strip()
+        if not greeting:
+            greeting = (
+                f"Hi {user_first}! I am your Kashé coach. "
+                "Ask me about your points, challenges, or anything fitness related!"
+            )
+        return jsonify({"greeting": greeting}), 200
+    except Exception as err:
+        print(f"Greeting error: {str(err)}")
+        return jsonify({"error": f"Greeting service error: {str(err)}"}), 500
+
+
 @app.route('/api/chat', methods=['POST'])
 @jwt_required()
 def chat():
-    """Chat endpoint with Gemini AI using automatic tool calling (read + actions)."""
+    """Chat: deterministic handlers for common intents, then Gemini with tools."""
     data = request.get_json() or {}
     message = data.get("message")
     history = data.get("history")
@@ -787,11 +1417,79 @@ def chat():
     if history is not None and not isinstance(history, list):
         return jsonify({"error": "history must be an array when provided"}), 400
 
-    contents = _chat_history_to_contents(history or [], message)
+    user_id = get_jwt_identity()
+    uid = str(user_id)
+    message_str = str(message).strip()
+
+    pending_raw = (data.get("pending_challenge_title") or "").strip()
+    pending_challenge_title = _normalize_challenge_name_fragment(pending_raw)
+
+    def _ok(reply: str, pending=None):
+        return jsonify(
+            {"reply": reply, "pending_challenge_title": pending}
+        ), 200
+
+    if pending_challenge_title and _is_affirmative_message(message_str):
+        en = enroll_in_challenge(uid, pending_challenge_title)
+        if not en.get("success"):
+            low = (en.get("message") or "").lower()
+            if "already enrolled" not in low:
+                return _ok(en["message"], pending_challenge_title)
+
+        prefix = (en["message"] + " ") if en.get("success") else ""
+        loc = log_class_for_challenge(uid, pending_challenge_title)
+        if loc.get("success"):
+            return _ok(
+                prefix + _format_log_class_success_reply(loc, pending_challenge_title),
+                None,
+            )
+        return _ok(prefix + (loc.get("message") or "Could not log that class."), None)
+
+    log_frag = _extract_log_class_challenge_title(message_str)
+    if log_frag:
+        tr = log_class_for_challenge(uid, log_frag)
+        if tr.get("success"):
+            return _ok(_format_log_class_success_reply(tr, log_frag), None)
+        if tr.get("reason") == "not_enrolled":
+            ct = tr.get("challenge_title") or log_frag
+            return _ok(
+                f"You're not enrolled in {ct} yet. Want me to enroll you first? "
+                f"Say yes when you are ready.",
+                ct,
+            )
+        if tr.get("reason") == "already_completed":
+            ct = tr.get("challenge_title") or log_frag
+            return _ok(
+                f"You already completed {ct}. Try logging toward another active challenge, "
+                f"or enroll in something new from the Challenges tab.",
+                None,
+            )
+        cat = _catalog_active_challenge_names()
+        return _ok(
+            f"I could not match that to a challenge name. Open challenges right now: {cat}.",
+            None,
+        )
+
+    enroll_frag = _extract_enroll_challenge_title(message_str)
+    if enroll_frag:
+        er = enroll_in_challenge(uid, enroll_frag)
+        return _ok(er["message"], None)
+
+    redeem_frag = _extract_redeem_reward_title(message_str)
+    if redeem_frag:
+        rr = redeem_reward_for_user(uid, redeem_frag)
+        if rr.get("success"):
+            return _ok(
+                f"Redeemed {rr['reward_title']}! Your code is {rr['code']}. "
+                f"Save it for checkout.",
+                None,
+            )
+        return _ok(rr.get("message") or KASHE_CHAT_HELP_PROMPT, None)
+
+    contents = _chat_history_to_contents(history or [], message_str)
     if not contents:
         return jsonify({"error": "message is required"}), 400
 
-    user_id = get_jwt_identity()
     system_instruction = CHAT_SYSTEM_INSTRUCTION.format(
         authenticated_user_id=user_id
     )
@@ -799,20 +1497,31 @@ def chat():
     try:
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                tools=GEMINI_CHAT_TOOLS,
-            ),
-        )
+        def _run_model():
+            return client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    tools=GEMINI_CHAT_TOOLS,
+                ),
+            )
 
-        return jsonify({"reply": response.text}), 200
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(_run_model)
+            try:
+                response = fut.result(timeout=GEMINI_CHAT_GENERATE_TIMEOUT_SEC)
+            except FuturesTimeout:
+                return _ok(KASHE_CHAT_TECH_BLIP, None)
+
+        reply = (response.text or "").strip()
+        if _looks_unhelpful_gemini_reply(reply):
+            reply = KASHE_CHAT_HELP_PROMPT
+        return _ok(reply, None)
 
     except Exception as err:
-        print(f"Chat error: {str(err)}")  # Debug logging
-        return jsonify({"error": f"Chat service error: {str(err)}"}), 500
+        print(f"Chat error: {str(err)}")
+        return _ok(KASHE_CHAT_TECH_BLIP, None)
 
 
 if __name__ == "__main__":

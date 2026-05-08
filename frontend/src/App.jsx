@@ -35,7 +35,7 @@ function App() {
         <Route path="/challenges" element={isAuthenticated ? <Challenges /> : <Navigate to="/" />} />
         <Route path="/challenges/:id" element={isAuthenticated ? <ChallengeDetail /> : <Navigate to="/" />} />
         <Route path="/rewards" element={isAuthenticated ? <Rewards /> : <Navigate to="/" />} />
-        <Route path="/chat" element={isAuthenticated ? <Chat /> : <Navigate to="/" />} />
+        <Route path="/chat" element={isAuthenticated ? <Chat setIsAuthenticated={setIsAuthenticated} /> : <Navigate to="/" />} />
         <Route path="/profile" element={isAuthenticated ? <Profile /> : <Navigate to="/" />} />
       </Routes>
     </Router>

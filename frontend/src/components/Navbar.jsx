@@ -23,6 +23,12 @@ function Navbar({ setIsAuthenticated }) {
   }, []);
 
   const handleLogout = () => {
+    try {
+      sessionStorage.removeItem('kashe_chat_history');
+      sessionStorage.removeItem('kashe_pending_log_challenge');
+    } catch {
+      // ignore
+    }
     localStorage.clear();
     setIsAuthenticated(false);
     navigate('/');
