@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import './Challenges.css';
@@ -10,6 +10,8 @@ function Challenges() {
   const [error, setError] = useState(null);
   const [enrollmentsByChallengeId, setEnrollmentsByChallengeId] = useState({});
   const [enrollingId, setEnrollingId] = useState(null);
+  /** Local only — cleared when leaving this page (no URL/storage persistence). */
+  const [searchQuery, setSearchQuery] = useState('');
 
   const loadChallengesAndEnrollments = useCallback(async () => {
     const token = localStorage.getItem('token');
@@ -85,6 +87,12 @@ function Challenges() {
     }
   };
 
+  const filteredChallenges = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return challenges;
+    return challenges.filter((c) => (c.title || '').toLowerCase().includes(q));
+  }, [challenges, searchQuery]);
+
   return (
     <div className="challenges-container">
       <div className="challenges-content">
@@ -98,64 +106,90 @@ function Challenges() {
           <p className="no-challenges">No challenges available</p>
         )}
 
-        <div className="challenges-grid">
-          {challenges.map((challenge) => {
-            const enrollment = enrollmentsByChallengeId[challenge.id];
-            const isEnrolled = Boolean(enrollment);
-            const isComplete =
-              isEnrolled &&
-              enrollment.required_classes > 0 &&
-              enrollment.classes_completed >= enrollment.required_classes;
+        {!loading && !error && challenges.length > 0 && (
+          <div className="challenges-search-row">
+            <span className="challenges-search-icon" aria-hidden>
+              🔍
+            </span>
+            <input
+              id="challenges-search-input"
+              type="search"
+              className="challenges-search-input"
+              placeholder="Search challenges..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              autoComplete="off"
+              aria-label="Search challenges by title"
+            />
+          </div>
+        )}
 
-            return (
-              <div
-                key={challenge.id}
-                className={`challenge-card${isComplete ? ' challenge-card--completed' : ''}${
-                  !isEnrolled ? ' challenge-card--available' : ''
-                }`}
-                onClick={() => navigate(`/challenges/${challenge.id}`)}
-              >
-                {isComplete && (
-                  <span className="challenge-badge-completed" aria-label="Challenge completed">
-                    ✓ Completed
-                  </span>
-                )}
-                <h2
-                  className={`challenge-title${isComplete ? ' challenge-title--done challenge-title--with-badge' : ''}`}
+        {!loading && !error && challenges.length > 0 && filteredChallenges.length === 0 && searchQuery.trim() !== '' && (
+          <p className="challenges-search-empty">
+            {`No challenges found for '${searchQuery.trim()}'`}
+          </p>
+        )}
+
+        {!loading && !error && filteredChallenges.length > 0 && (
+          <div className="challenges-grid">
+            {filteredChallenges.map((challenge) => {
+              const enrollment = enrollmentsByChallengeId[challenge.id];
+              const isEnrolled = Boolean(enrollment);
+              const isComplete =
+                isEnrolled &&
+                enrollment.required_classes > 0 &&
+                enrollment.classes_completed >= enrollment.required_classes;
+
+              return (
+                <div
+                  key={challenge.id}
+                  className={`challenge-card${isComplete ? ' challenge-card--completed' : ''}${
+                    !isEnrolled ? ' challenge-card--available' : ''
+                  }`}
+                  onClick={() => navigate(`/challenges/${challenge.id}`)}
                 >
-                  {challenge.title}
-                </h2>
-                <p className="challenge-subtitle">
-                  {challenge.required_classes} classes · {challenge.points_reward} pts
-                </p>
-                {isEnrolled && !isComplete && (
-                  <p className="challenge-classes-progress">
-                    {enrollment.classes_completed} / {enrollment.required_classes} classes
-                  </p>
-                )}
-                {!isEnrolled ? (
-                  <button
-                    type="button"
-                    className="enroll-button enroll-button--join"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      handleEnroll(challenge.id);
-                    }}
-                    disabled={enrollingId === challenge.id}
+                  {isComplete && (
+                    <span className="challenge-badge-completed" aria-label="Challenge completed">
+                      ✓ Completed
+                    </span>
+                  )}
+                  <h2
+                    className={`challenge-title${isComplete ? ' challenge-title--done challenge-title--with-badge' : ''}`}
                   >
-                    Join
-                  </button>
-                ) : isComplete ? (
-                  <span className="enroll-status-completed">Completed ✓</span>
-                ) : (
-                  <button type="button" className="enroll-button enroll-button--enrolled" disabled>
-                    Enrolled
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                    {challenge.title}
+                  </h2>
+                  <p className="challenge-subtitle">
+                    {challenge.required_classes} classes · {challenge.points_reward} pts
+                  </p>
+                  {isEnrolled && !isComplete && (
+                    <p className="challenge-classes-progress">
+                      {enrollment.classes_completed} / {enrollment.required_classes} classes
+                    </p>
+                  )}
+                  {!isEnrolled ? (
+                    <button
+                      type="button"
+                      className="enroll-button enroll-button--join"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleEnroll(challenge.id);
+                      }}
+                      disabled={enrollingId === challenge.id}
+                    >
+                      Join
+                    </button>
+                  ) : isComplete ? (
+                    <span className="enroll-status-completed">Completed ✓</span>
+                  ) : (
+                    <button type="button" className="enroll-button enroll-button--enrolled" disabled>
+                      Enrolled
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <Navbar />
