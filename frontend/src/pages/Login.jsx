@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import './Login.css';
 import { signInWithPopup } from 'firebase/auth';
 import { auth, GoogleAuthProvider } from '../firebase';
 
@@ -83,6 +84,9 @@ function Login({ setIsAuthenticated }) {
   return (
     <div className="auth-page">
       <div className="auth-card">
+        <span className="auth-card-logo" aria-hidden>
+          ◇
+        </span>
         <h1>Login to Kashé</h1>
         <form onSubmit={handleSubmit}>
           <input

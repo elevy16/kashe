@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import './Home.css';
 
@@ -59,27 +59,48 @@ function Home({ setIsAuthenticated }) {
           <h3 className="section-title">my challenges</h3>
 
           {!loading && enrollments.length === 0 && (
-            <p className="no-enrollments">No active challenges. Explore new challenges!</p>
+            <div className="home-empty-state">
+              <span className="home-empty-diamond" aria-hidden>
+                {'\u25C6'}
+              </span>
+              <p className="home-empty-title">No challenges yet</p>
+              <p className="home-empty-sub">Join a challenge to start earning points</p>
+              <Link to="/challenges" className="browse-challenges-button home-empty-browse">
+                Browse Challenges →
+              </Link>
+            </div>
           )}
 
           <div className="enrollments-grid">
             {enrollments.map((enrollment) => {
-              const progress = enrollment.required_classes > 0
-                ? (enrollment.classes_completed / enrollment.required_classes) * 100
-                : 0;
+              const isComplete =
+                enrollment.required_classes > 0 &&
+                enrollment.classes_completed >= enrollment.required_classes;
+              const progress = isComplete
+                ? 100
+                : enrollment.required_classes > 0
+                  ? (enrollment.classes_completed / enrollment.required_classes) * 100
+                  : 0;
               return (
                 <div
                   key={enrollment.id}
-                  className="enrollment-card"
+                  className={`enrollment-card${isComplete ? ' enrollment-card--completed' : ''}`}
                   onClick={() => navigate(`/challenges/${enrollment.challenge_id}`)}
                 >
-                  <h4 className="enrollment-title">{enrollment.title}</h4>
+                  {isComplete && (
+                    <span className="enrollment-badge" aria-label="Challenge completed">
+                      ✓ Completed
+                    </span>
+                  )}
+                  <h4 className={`enrollment-title${isComplete ? ' enrollment-title--done' : ''}`}>
+                    {enrollment.title}
+                  </h4>
                   <div className="progress-container">
                     <div className="progress-bar">
                       <div
-                        className="progress-fill"
+                        className={`progress-fill${isComplete ? ' progress-fill--complete' : ''}`}
                         style={{ width: `${progress}%` }}
-                      ></div>
+                      />
                     </div>
                     <p className="progress-text">
                       {enrollment.classes_completed} / {enrollment.required_classes} classes
@@ -89,9 +110,11 @@ function Home({ setIsAuthenticated }) {
               );
             })}
           </div>
-          <button className="browse-challenges-button" onClick={() => navigate('/challenges')}>
-            Browse Challenges →
-          </button>
+          {!loading && enrollments.length > 0 && (
+            <button type="button" className="browse-challenges-button" onClick={() => navigate('/challenges')}>
+              Browse Challenges →
+            </button>
+          )}
         </div>
 
       </div>

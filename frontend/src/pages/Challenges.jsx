@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import './Challenges.css';
@@ -8,50 +8,51 @@ function Challenges() {
   const [challenges, setChallenges] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [enrolledChallenges, setEnrolledChallenges] = useState(new Set());
+  const [enrollmentsByChallengeId, setEnrollmentsByChallengeId] = useState({});
   const [enrollingId, setEnrollingId] = useState(null);
 
+  const loadChallengesAndEnrollments = useCallback(async () => {
+    const token = localStorage.getItem('token');
+
+    const challengesResponse = await fetch('http://127.0.0.1:5000/api/challenges', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!challengesResponse.ok) {
+      throw new Error('Failed to fetch challenges');
+    }
+
+    const challengesData = await challengesResponse.json();
+    setChallenges(challengesData || []);
+
+    const enrollmentsResponse = await fetch('http://127.0.0.1:5000/api/enrollments', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    const map = {};
+    if (enrollmentsResponse.ok) {
+      const enrollmentsData = await enrollmentsResponse.json();
+      (enrollmentsData || []).forEach((row) => {
+        map[row.challenge_id] = row;
+      });
+    }
+    setEnrollmentsByChallengeId(map);
+  }, []);
+
   useEffect(() => {
-    const fetchChallenges = async () => {
+    const run = async () => {
       try {
         setLoading(true);
         setError(null);
-        const token = localStorage.getItem('token');
-        
-        const challengesResponse = await fetch('http://127.0.0.1:5000/api/challenges', {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          },
-        });
-
-        if (!challengesResponse.ok) {
-          throw new Error('Failed to fetch challenges');
-        }
-
-        const challengesData = await challengesResponse.json();
-        setChallenges(challengesData || []);
-
-        // Fetch enrollments to pre-populate enrolled state
-        const enrollmentsResponse = await fetch('http://127.0.0.1:5000/api/enrollments', {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          },
-        });
-
-        if (enrollmentsResponse.ok) {
-          const enrollmentsData = await enrollmentsResponse.json();
-          const enrolledIds = new Set(enrollmentsData.map((enrollment) => enrollment.challenge_id));
-          setEnrolledChallenges(enrolledIds);
-        }
+        await loadChallengesAndEnrollments();
       } catch (err) {
         setError(err.message || 'An error occurred while fetching challenges');
       } finally {
         setLoading(false);
       }
     };
-
-    fetchChallenges();
-  }, []);
+    run();
+  }, [loadChallengesAndEnrollments]);
 
   const handleEnroll = async (challengeId) => {
     try {
@@ -62,14 +63,13 @@ function Challenges() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ challenge_id: challengeId }),
       });
 
       if (response.status === 409) {
-        // Already enrolled
-        setEnrolledChallenges((prev) => new Set(prev).add(challengeId));
+        await loadChallengesAndEnrollments();
         return;
       }
 
@@ -77,7 +77,7 @@ function Challenges() {
         throw new Error('Failed to enroll in challenge');
       }
 
-      setEnrolledChallenges((prev) => new Set(prev).add(challengeId));
+      await loadChallengesAndEnrollments();
     } catch (err) {
       setError(err.message || 'An error occurred during enrollment');
     } finally {
@@ -99,30 +99,62 @@ function Challenges() {
         )}
 
         <div className="challenges-grid">
-          {challenges.map((challenge) => (
-            <div
-              key={challenge.id}
-              className="challenge-card"
-              onClick={() => navigate(`/challenges/${challenge.id}`)}
-            >
-              <h2 className="challenge-title">{challenge.title}</h2>
-              <p className="challenge-subtitle">
-                {challenge.required_classes} classes · {challenge.points_reward} pts
-              </p>
-              <button
-                className={`enroll-button ${
-                  enrolledChallenges.has(challenge.id) ? 'enrolled' : ''
+          {challenges.map((challenge) => {
+            const enrollment = enrollmentsByChallengeId[challenge.id];
+            const isEnrolled = Boolean(enrollment);
+            const isComplete =
+              isEnrolled &&
+              enrollment.required_classes > 0 &&
+              enrollment.classes_completed >= enrollment.required_classes;
+
+            return (
+              <div
+                key={challenge.id}
+                className={`challenge-card${isComplete ? ' challenge-card--completed' : ''}${
+                  !isEnrolled ? ' challenge-card--available' : ''
                 }`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  handleEnroll(challenge.id);
-                }}
-                disabled={enrolledChallenges.has(challenge.id) || enrollingId === challenge.id}
+                onClick={() => navigate(`/challenges/${challenge.id}`)}
               >
-                {enrolledChallenges.has(challenge.id) ? 'Enrolled' : 'Join'}
-              </button>
-            </div>
-          ))}
+                {isComplete && (
+                  <span className="challenge-badge-completed" aria-label="Challenge completed">
+                    ✓ Completed
+                  </span>
+                )}
+                <h2
+                  className={`challenge-title${isComplete ? ' challenge-title--done challenge-title--with-badge' : ''}`}
+                >
+                  {challenge.title}
+                </h2>
+                <p className="challenge-subtitle">
+                  {challenge.required_classes} classes · {challenge.points_reward} pts
+                </p>
+                {isEnrolled && !isComplete && (
+                  <p className="challenge-classes-progress">
+                    {enrollment.classes_completed} / {enrollment.required_classes} classes
+                  </p>
+                )}
+                {!isEnrolled ? (
+                  <button
+                    type="button"
+                    className="enroll-button enroll-button--join"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleEnroll(challenge.id);
+                    }}
+                    disabled={enrollingId === challenge.id}
+                  >
+                    Join
+                  </button>
+                ) : isComplete ? (
+                  <span className="enroll-status-completed">Completed ✓</span>
+                ) : (
+                  <button type="button" className="enroll-button enroll-button--enrolled" disabled>
+                    Enrolled
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 
