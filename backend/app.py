@@ -16,7 +16,7 @@ from sqlalchemy import and_, func, or_
 from google import genai
 from google.genai import types
 
-from extensions import db, jwt
+from extensions import db, jwt, socketio
 
 from models import Challenge, Enrollment, PointTxn, Reward, Redemption, User
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -35,13 +35,7 @@ _DEFAULT_SQLITE_URI = "sqlite:///" + (_INSTANCE_DIR / "kashe_dev.db").resolve().
 
 app = Flask(__name__)
 
-CORS(
-    app,
-    origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
-)
+CORS(app, origins=["http://localhost:5173", "http://127.0.0.1:5173"])
 
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
     "DATABASE_URL", _DEFAULT_SQLITE_URI
@@ -54,6 +48,7 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 # Initialize extensions
 db.init_app(app)
 jwt.init_app(app)
+socketio.init_app(app)
 
 # Import models after extensions are initialized to avoid circular imports
 import models  # noqa: F401
@@ -61,6 +56,39 @@ import models  # noqa: F401
 # Ensure tables are created on startup
 with app.app_context():
     db.create_all()
+
+
+@socketio.on("connect")
+def handle_connect():
+    print("Client connected")
+
+
+def _emit_points_updated(
+    user_id,
+    *,
+    classes_completed,
+    challenge_title,
+    completed,
+    points_earned,
+):
+    """Broadcast balance + check-in progress after DB commit (all clients; filter client-side)."""
+    uid = str(user_id)
+    new_balance = (
+        db.session.query(func.sum(PointTxn.delta)).filter_by(user_id=uid).scalar() or 0
+    )
+    print(f"Emitting points_updated for user {user_id}, balance {new_balance}")
+    socketio.emit(
+        "points_updated",
+        {
+            "user_id": uid,
+            "new_balance": int(new_balance),
+            "classes_completed": int(classes_completed),
+            "challenge_title": challenge_title or "",
+            "completed": bool(completed),
+            "points_earned": int(points_earned or 0),
+        },
+        to=None,
+    )
 
 
 def _ensure_firebase_admin():
@@ -299,6 +327,13 @@ def checkin():
         db.session.add(txn)
 
     db.session.commit()
+    _emit_points_updated(
+        user_id,
+        classes_completed=enrollment.classes_completed,
+        challenge_title=challenge.title if challenge else "",
+        completed=completed,
+        points_earned=points_earned,
+    )
     return jsonify({
         "classes_completed": enrollment.classes_completed,
         "completed": completed,
@@ -1013,6 +1048,13 @@ def log_class_for_challenge(user_id: str, challenge_title: str) -> dict:
             db.session.add(txn)
 
         db.session.commit()
+        _emit_points_updated(
+            user_id,
+            classes_completed=enrollment.classes_completed,
+            challenge_title=challenge.title,
+            completed=completed,
+            points_earned=points_earned,
+        )
         return {
             "success": True,
             "classes_completed": enrollment.classes_completed,
@@ -1525,4 +1567,4 @@ def chat():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    socketio.run(app, debug=True)
