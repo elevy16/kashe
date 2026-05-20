@@ -43,6 +43,29 @@ function Home({ setIsAuthenticated }) {
     fetchData();
   }, []);
 
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) return undefined;
+
+    const pollEnrollments = async () => {
+      try {
+        const res = await fetch('http://127.0.0.1:5000/api/enrollments', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const list = data || [];
+        setEnrollments((prev) => (JSON.stringify(prev) === JSON.stringify(list) ? prev : list));
+      } catch {
+        // ignore
+      }
+    };
+
+    pollEnrollments();
+    const id = window.setInterval(pollEnrollments, 5000);
+    return () => window.clearInterval(id);
+  }, []);
+
   return (
     <div className="home-container">
       <div className="home-content">
