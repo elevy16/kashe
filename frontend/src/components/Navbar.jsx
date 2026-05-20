@@ -30,7 +30,7 @@ function Navbar({ setIsAuthenticated }) {
       // ignore
     }
     localStorage.clear();
-    setIsAuthenticated(false);
+    setIsAuthenticated?.(false);
     navigate('/');
   };
 
@@ -47,9 +47,13 @@ function Navbar({ setIsAuthenticated }) {
       <aside className="sidebar-nav">
         <div className="sidebar-content">
           <div className="sidebar-top">
-            <div className="sidebar-brand">
-              <span className="sidebar-logo">◇</span>
-              <span>kashé</span>
+            <div className="sidebar-brand-block">
+              <div className="sidebar-brand">
+                <span className="sidebar-logo" aria-hidden>
+                  {'\u25C6'}
+                </span>
+                <span className="sidebar-brand-name">kashé</span>
+              </div>
             </div>
 
             <div className="sidebar-links">

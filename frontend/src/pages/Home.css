@@ -79,6 +79,7 @@
 }
 
 .enrollment-card {
+  position: relative;
   background-color: white;
   border-radius: 12px;
   padding: 16px;
@@ -92,11 +93,35 @@
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
 }
 
+.enrollment-card--completed {
+  border-left: 4px solid #8baf9f;
+  padding-left: 12px;
+}
+
+.enrollment-badge {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #ffffff;
+  background-color: #8baf9f;
+  padding: 4px 10px;
+  border-radius: 999px;
+  line-height: 1.2;
+}
+
 .enrollment-title {
-  color: #2D2D2D;
+  color: #2d2d2d;
   font-size: 16px;
   font-weight: 600;
   margin: 0 0 12px 0;
+}
+
+.enrollment-title--done {
+  color: #666666;
+  padding-right: 100px;
 }
 
 .progress-container {
@@ -114,8 +139,12 @@
 
 .progress-fill {
   height: 100%;
-  background-color: #8BAF9F;
+  background-color: #8baf9f;
   transition: width 0.3s ease;
+}
+
+.progress-fill--complete {
+  background-color: #8baf9f;
 }
 
 .progress-text {
@@ -151,12 +180,41 @@
   cursor: not-allowed;
 }
 
-.no-enrollments {
-  color: #888888;
+.home-empty-state {
   text-align: center;
-  padding: 20px;
-  font-size: 14px;
-  margin: 20px 0;
+  padding: 48px 24px 40px;
+  margin: 8px 0 24px;
+}
+
+.home-empty-diamond {
+  display: block;
+  font-size: 48px;
+  color: #8baf9f;
+  line-height: 1;
+  margin-bottom: 20px;
+}
+
+.home-empty-title {
+  font-family: 'Playfair Display', serif;
+  font-size: 22px;
+  font-weight: 600;
+  color: #2d2d2d;
+  margin: 0 0 10px;
+}
+
+.home-empty-sub {
+  color: #888888;
+  font-size: 15px;
+  margin: 0 0 28px;
+  line-height: 1.45;
+}
+
+.home-empty-browse {
+  display: inline-block;
+  text-decoration: none;
+  text-align: center;
+  width: auto;
+  min-width: 200px;
 }
 
 .logout-button {
@@ -200,15 +258,16 @@
 
 .browse-challenges-button {
   width: 100%;
-  background-color: #8BAF9F;
-  color: white;
+  background-color: #8baf9f;
+  color: #ffffff;
   border: none;
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 10px 24px;
   font-size: 16px;
   font-weight: 700;
   cursor: pointer;
   margin-top: 16px;
+  transition: background-color 0.2s ease;
 }
 
 .browse-challenges-button:hover {

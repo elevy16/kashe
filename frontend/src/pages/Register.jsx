@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import './Register.css';
 import { signInWithPopup } from 'firebase/auth';
 import { auth, GoogleAuthProvider } from '../firebase';
 
@@ -78,6 +79,9 @@ function Register({ setIsAuthenticated }) {
   return (
     <div className="auth-page">
       <div className="auth-card">
+        <span className="auth-card-logo" aria-hidden>
+          ◇
+        </span>
         <h1>Register for Kashé</h1>
         <form onSubmit={handleSubmit}>
           <input type="text" placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} required />
