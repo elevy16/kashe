@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request, stream_with_context
 from flask_jwt_extended import create_access_token
 from werkzeug.security import check_password_hash, generate_password_hash
 from sqlalchemy import and_, func, or_
@@ -504,11 +504,24 @@ def get_lifetime_points():
 # --- Gemini chat tools (read + action). DB access runs inside app.app_context(). ---
 
 GREETING_SYSTEM_INSTRUCTION = (
-    "Generate a short, personalized, encouraging opening message "
-    "for a Kashé fitness coach chatbot. Be specific about the "
-    "user's actual progress. Mention something actionable. "
-    "Keep it to 2 sentences max. No markdown. Be warm and motivating."
+    "Generate a short personalized greeting from Kai, a friendly Kashé fitness coach. "
+    "Start with 'Hi [name], I'm Kai!' using the user's first name from the data. "
+    "Then mention one specific thing about their progress (a challenge close to done, "
+    "recent points, or an active streak). Keep it to 2 sentences max. No markdown. "
+    "Be warm, motivating, and actionable."
 )
+
+_WEEKDAY_NAMES = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+]
+# Spread workouts across the week (at least 2 rest days; max 5 workout days).
+_WEEKLY_PLAN_DAY_INDICES = [0, 2, 4, 1, 3]
 
 
 def _build_activity_summary(user_id: str) -> dict:
@@ -599,17 +612,36 @@ def _build_activity_summary(user_id: str) -> dict:
     }
 
 
-CHAT_SYSTEM_INSTRUCTION = """You are an action-oriented Kashé fitness coach and assistant.
+CHAT_SYSTEM_INSTRUCTION = """You are Kai, an action-oriented Kashé fitness coach and assistant.
 Kashé is a fitness loyalty app where users earn points by completing
 class challenges and redeem them for rewards.
+
+On the very first message of a conversation only (no prior assistant replies in history),
+introduce yourself once as: "Hi! I'm Kai, your Kashé fitness coach" then answer their question.
+Do not repeat the full introduction on later messages.
 
 You know boutique fitness: studios like SoulCycle, Club Pilates, CorePower Yoga,
 Pure Barre, Barry's, and similar venues, plus common class types including HIIT,
 Pilates, Barre, Yoga, Strength, and cardio-forward formats.
 
+You understand recovery and rest days matter as much as workout days. Consistency beats
+intensity — encourage sustainable weekly habits, not burnout.
+
+When the user asks "plan my week", "help me plan", or "what should I do this week":
+call suggest_weekly_plan and present the result as a clear day-by-day schedule with reasons.
+
+When the user asks "am I on pace", "will I finish in time", or similar deadline questions:
+call analyze_weekly_pace and give specific feedback with real numbers and challenge names.
+
+When the user seems discouraged or asks for motivation (e.g. "motivate me", "I'm struggling"):
+call get_motivational_context and use the stats to encourage them with real numbers.
+
 When the user asks what they should do next, or wants a recommendation, use their
 current enrollments and progress (from your tools) to suggest they prioritize the
 challenge they are closest to completing first, then others.
+
+Always be specific — use real numbers, real challenge names, and real deadlines from tools.
+Never invent progress or dates.
 
 After you successfully log a class for them, check if they are now within one or
 two classes of finishing that challenge and mention it when relevant.
@@ -628,7 +660,19 @@ matching. If the user types 'pilates powerhouse' or 'Pilates Powerhouse' or
 'PILATES POWERHOUSE', treat them all the same. Never fail to recognize a challenge
 name just because of capitalization.
 
-Keep responses concise, warm, and action-oriented.
+VOICE AND FORMATTING (Kai — premium wellness brand):
+- Clean, minimal, elegant. Generous line breaks — one idea per line.
+- Short sentences. Direct. Never generic or cheerleader-ish.
+- Tone: knowledgeable personal trainer who respects the user's intelligence. Warm but efficient.
+- Use minimal geometric unicode accents very sparingly for structure only: ◆ ◇ · — › ○ ●
+  Never standard emojis. Never clipart energy.
+- Weekly plans and pace checks should read like a formatted card, not a paragraph.
+  Example structure:
+  ◆ Your week
+  Monday · Pilates Powerhouse
+  › Two classes left to stay on pace
+- Never use markdown bold (**), asterisks, or hyphen bullet lists (-).
+- End with one forward-looking sentence (› ...). Never backward-looking praise.
 
 CRITICAL RULES:
 - When a user confirms they want to do something, IMMEDIATELY call
@@ -651,10 +695,6 @@ gave. Do this for any capitalization or minor wording variation. The tool matche
 challenge names case-insensitively, so never skip calling it because the user used lowercase.
 
 For enrolling and redeeming, confirm once then immediately act.
-Be encouraging, brief, and action-oriented.
-
-Never use markdown formatting like **bold** or *bullets*
-in your responses. Use plain text only.
 
 Never reply with apologies like "sorry, I didn't understand". If unsure, steer the
 user toward Kashé: logging classes toward challenges, enrolling, checking balance,
@@ -1153,6 +1193,217 @@ def redeem_reward_for_user(user_id: str, reward_title: str) -> dict:
         return {"success": True, "code": code, "reward_title": reward.title}
 
 
+def _build_pace_analysis(user_id: str) -> list:
+    """Pace rows for active enrollments (expects Flask app context)."""
+    uid = int(user_id)
+    now = datetime.utcnow()
+    rows = []
+
+    for enrollment in Enrollment.query.filter_by(user_id=uid, status="active").all():
+        challenge = db.session.get(Challenge, enrollment.challenge_id)
+        if not challenge:
+            continue
+
+        required = challenge.required_classes or 0
+        completed = enrollment.classes_completed or 0
+        remaining = max(required - completed, 0)
+        if remaining <= 0:
+            continue
+
+        if not challenge.deadline:
+            rows.append(
+                {
+                    "challenge_title": challenge.title,
+                    "classes_remaining": remaining,
+                    "days_until_deadline": None,
+                    "classes_per_week_needed": None,
+                    "status": "no_deadline",
+                }
+            )
+            continue
+
+        delta = challenge.deadline - now
+        days_until = max(int(delta.total_seconds() // 86400), 0)
+        weeks_left = max(days_until / 7.0, 0.01)
+        cpw = round(remaining / weeks_left, 1)
+
+        if days_until == 0 and remaining > 0:
+            status = "behind"
+        else:
+            start = enrollment.created_at or now
+            total_span = (challenge.deadline - start).total_seconds()
+            if total_span <= 0:
+                status = "on_pace"
+            else:
+                elapsed = (now - start).total_seconds()
+                time_ratio = min(max(elapsed / total_span, 0.0), 1.0)
+                progress_ratio = completed / required if required else 1.0
+                if progress_ratio >= time_ratio + 0.1:
+                    status = "ahead"
+                elif progress_ratio < time_ratio - 0.08:
+                    status = "behind"
+                else:
+                    status = "on_pace"
+
+        rows.append(
+            {
+                "challenge_title": challenge.title,
+                "classes_remaining": remaining,
+                "days_until_deadline": days_until,
+                "classes_per_week_needed": cpw,
+                "status": status,
+            }
+        )
+
+    return rows
+
+
+def analyze_weekly_pace(user_id: str) -> dict:
+    """Analyze whether the user is on pace to finish each active challenge by its deadline.
+
+    Args:
+        user_id: Authenticated user's id (string from JWT).
+
+    Returns:
+        dict with key ``pace_analysis``: list of per-challenge pace rows (title, remaining,
+        days until deadline, classes per week needed, status on_pace|behind|ahead|no_deadline).
+    """
+    with app.app_context():
+        return {"pace_analysis": _build_pace_analysis(user_id)}
+
+
+def suggest_weekly_plan(user_id: str) -> dict:
+    """Build a 7-day workout plan from pace analysis (max 5 class days, 2+ rest days).
+
+    Args:
+        user_id: Authenticated user's id (string from JWT).
+
+    Returns:
+        dict with key ``weekly_plan``: list of day, challenge, and reason entries.
+    """
+    with app.app_context():
+        pace_rows = _build_pace_analysis(user_id)
+        if not pace_rows:
+            return {
+                "weekly_plan": [],
+                "message": "No active challenges with classes left — enroll in a challenge first!",
+            }
+
+        status_rank = {"behind": 0, "on_pace": 1, "ahead": 2, "no_deadline": 3}
+
+        def sort_key(row):
+            days = row.get("days_until_deadline")
+            days_sort = days if days is not None else 9999
+            cpw = row.get("classes_per_week_needed") or 0
+            return (status_rank.get(row["status"], 9), days_sort, -cpw)
+
+        prioritized = sorted(pace_rows, key=sort_key)
+
+        weekly_plan = []
+        challenge_idx = 0
+        for day_slot, day_index in enumerate(_WEEKLY_PLAN_DAY_INDICES):
+            if day_slot >= 5:
+                break
+            row = prioritized[challenge_idx % len(prioritized)]
+            challenge_idx += 1
+
+            title = row["challenge_title"]
+            remaining = row["classes_remaining"]
+            status = row["status"]
+            days = row.get("days_until_deadline")
+            cpw = row.get("classes_per_week_needed")
+
+            if status == "behind" and days is not None:
+                reason = (
+                    f"You are behind — {remaining} class(es) left with only {days} day(s) "
+                    f"until the deadline; aim for about {cpw} classes per week."
+                )
+            elif status == "on_pace" and cpw is not None:
+                reason = (
+                    f"You need about {cpw} class(es) per week to stay on pace — "
+                    f"{remaining} left to finish."
+                )
+            elif status == "ahead":
+                reason = (
+                    f"You are ahead of schedule with {remaining} class(es) left — "
+                    f"keep your momentum going."
+                )
+            elif status == "no_deadline":
+                reason = (
+                    f"{remaining} class(es) remaining — no deadline, so this is a "
+                    f"great day to build consistency."
+                )
+            else:
+                reason = f"{remaining} class(es) remaining toward this challenge."
+
+            weekly_plan.append(
+                {
+                    "day": _WEEKDAY_NAMES[day_index],
+                    "challenge": title,
+                    "reason": reason,
+                }
+            )
+
+        return {"weekly_plan": weekly_plan}
+
+
+def get_motivational_context(user_id: str) -> dict:
+    """Return motivating stats: classes logged, lifetime points, completions, and goals.
+
+    Args:
+        user_id: Authenticated user's id (string from JWT).
+
+    Returns:
+        dict with total_classes_completed, lifetime_points_earned, challenges_completed,
+        closest_to_completion (title, classes_remaining), and points_available_from_active_challenges.
+    """
+    with app.app_context():
+        uid = int(user_id)
+
+        enrollments = Enrollment.query.filter_by(user_id=uid).all()
+        total_classes = sum(e.classes_completed or 0 for e in enrollments)
+        challenges_completed = sum(
+            1 for e in enrollments if e.status == "completed"
+        )
+
+        lifetime_points = int(
+            db.session.query(func.sum(PointTxn.delta))
+            .filter(PointTxn.user_id == uid, PointTxn.delta > 0)
+            .scalar()
+            or 0
+        )
+
+        closest = None
+        min_remaining = None
+        points_available = 0
+
+        for enrollment in enrollments:
+            if enrollment.status != "active":
+                continue
+            challenge = db.session.get(Challenge, enrollment.challenge_id)
+            if not challenge:
+                continue
+            remaining = max(
+                challenge.required_classes - (enrollment.classes_completed or 0), 0
+            )
+            if remaining > 0:
+                points_available += challenge.points_reward
+                if min_remaining is None or remaining < min_remaining:
+                    min_remaining = remaining
+                    closest = {
+                        "title": challenge.title,
+                        "classes_remaining": remaining,
+                    }
+
+        return {
+            "total_classes_completed": total_classes,
+            "lifetime_points_earned": lifetime_points,
+            "challenges_completed": challenges_completed,
+            "closest_to_completion": closest,
+            "points_available_from_active_challenges": points_available,
+        }
+
+
 GEMINI_CHAT_TOOLS = [
     get_user_balance,
     get_user_activity_summary,
@@ -1162,12 +1413,15 @@ GEMINI_CHAT_TOOLS = [
     log_class_for_challenge,
     get_available_rewards,
     redeem_reward_for_user,
+    analyze_weekly_pace,
+    suggest_weekly_plan,
+    get_motivational_context,
 ]
 
 
 KASHE_CHAT_HELP_PROMPT = (
-    "I can help you log classes, check your points, enroll in challenges, "
-    "or redeem rewards. What would you like?"
+    "I can help you log classes, plan your week, check if you are on pace, "
+    "motivate you with your stats, enroll in challenges, or redeem rewards. What would you like?"
 )
 
 KASHE_CHAT_TECH_BLIP = (
@@ -1355,6 +1609,338 @@ def _format_log_class_success_reply(result: dict, user_fragment: str) -> str:
     )
 
 
+def _extract_weekly_plan_intent(message: str) -> bool:
+    t = (message or "").strip().lower()
+    if not t:
+        return False
+    patterns = (
+        r"plan\s+my\s+week",
+        r"help\s+me\s+plan",
+        r"what\s+should\s+i\s+do\s+this\s+week",
+        r"weekly\s+plan",
+        r"schedule\s+my\s+week",
+        r"workout\s+plan\s+for\s+the\s+week",
+    )
+    return any(re.search(p, t) for p in patterns)
+
+
+def _extract_pace_intent(message: str) -> bool:
+    t = (message or "").strip().lower()
+    if not t:
+        return False
+    phrases = (
+        "am i on pace",
+        "on pace",
+        "will i finish in time",
+        "finish in time",
+        "behind schedule",
+        "behind on my",
+        "catch up",
+        "pace check",
+        "enough time to finish",
+    )
+    if any(p in t for p in phrases):
+        return True
+    return bool(re.search(r"can\s+i\s+finish\s+.+\s+in\s+time", t))
+
+
+def _extract_motivation_intent(message: str) -> bool:
+    t = (message or "").strip().lower()
+    if not t:
+        return False
+    needles = (
+        "motivate",
+        "discouraged",
+        "struggling",
+        "give up",
+        "need encouragement",
+        "feeling stuck",
+        "hard to stay",
+        "keep going",
+        "cheer me up",
+    )
+    return any(n in t for n in needles)
+
+
+def _format_pace_reply(pace_rows: list) -> str:
+    if not pace_rows:
+        return (
+            "◇ Pace check\n\n"
+            "No active challenges with classes left.\n\n"
+            "› Enroll in one challenge and log your first class this week."
+        )
+    lines = ["◇ Pace check", ""]
+    for row in pace_rows:
+        title = row["challenge_title"]
+        remaining = row["classes_remaining"]
+        status = row["status"]
+        days = row.get("days_until_deadline")
+        cpw = row.get("classes_per_week_needed")
+        if status == "no_deadline":
+            lines.append(f"{title}")
+            lines.append(f"· {remaining} classes left · no deadline")
+        elif status == "behind":
+            lines.append(f"{title}")
+            lines.append(f"● Behind · {remaining} left · {days} days")
+            lines.append(f"· Need ~{cpw} classes per week")
+        elif status == "ahead":
+            lines.append(f"{title}")
+            lines.append(f"○ Ahead · {remaining} left · {days} days")
+        else:
+            lines.append(f"{title}")
+            lines.append(f"· On pace · {remaining} left · {days} days")
+            lines.append(f"· ~{cpw} classes per week")
+        lines.append("")
+    lines.append("› Schedule your next class while the window is still open.")
+    return "\n".join(lines).rstrip()
+
+
+def _format_weekly_plan_reply(plan_data: dict) -> str:
+    plan = plan_data.get("weekly_plan") or []
+    if not plan:
+        return plan_data.get("message") or (
+            "◇ Weekly plan\n\n"
+            "No active enrollments to schedule.\n\n"
+            "› Join a challenge first, then ask me to plan your week."
+        )
+    lines = ["◆ Your week", "· One class per day · two rest days minimum", ""]
+    for entry in plan:
+        lines.append(f"{entry['day']} · {entry['challenge']}")
+        lines.append(f"› {entry['reason']}")
+        lines.append("")
+    lines.append("› Protect two rest days — recovery is part of the work.")
+    return "\n".join(lines).rstrip()
+
+
+def _format_motivation_reply(ctx: dict) -> str:
+    total = ctx.get("total_classes_completed", 0)
+    lifetime = ctx.get("lifetime_points_earned", 0)
+    done = ctx.get("challenges_completed", 0)
+    closest = ctx.get("closest_to_completion")
+    points_avail = ctx.get("points_available_from_active_challenges", 0)
+
+    lines = ["◇ Your numbers", ""]
+    lines.append(f"· {total} classes logged")
+    lines.append(f"· {lifetime} lifetime points")
+    lines.append(f"· {done} challenges completed")
+    if closest:
+        lines.append("")
+        lines.append(f"◆ Closest finish")
+        lines.append(f"· {closest['title']}")
+        lines.append(f"· {closest['classes_remaining']} class(es) remaining")
+    if points_avail:
+        lines.append("")
+        lines.append(f"· {points_avail} points still on the table from active challenges")
+    lines.append("")
+    lines.append("› Log one class today — momentum compounds.")
+    return "\n".join(lines)
+
+
+def _iter_sse_text_chunks(text: str):
+    """Split text into tokens for typewriter-style SSE (words and whitespace)."""
+    if not text:
+        return
+    for token in re.findall(r"\S+|\s+", text):
+        if token:
+            yield token
+
+
+def _sse_payload_line(payload: dict) -> str:
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+def _compute_chat_reply_or_none(
+    uid: str,
+    message_str: str,
+    history,
+    pending_challenge_title: str,
+):
+    """Return (reply, pending_challenge_title) for deterministic paths, or None for Gemini."""
+    if pending_challenge_title and _is_affirmative_message(message_str):
+        en = enroll_in_challenge(uid, pending_challenge_title)
+        if not en.get("success"):
+            low = (en.get("message") or "").lower()
+            if "already enrolled" not in low:
+                return (en["message"], pending_challenge_title)
+
+        prefix = (en["message"] + " ") if en.get("success") else ""
+        loc = log_class_for_challenge(uid, pending_challenge_title)
+        if loc.get("success"):
+            return (
+                prefix + _format_log_class_success_reply(loc, pending_challenge_title),
+                None,
+            )
+        return (prefix + (loc.get("message") or "Could not log that class."), None)
+
+    log_frag = _extract_log_class_challenge_title(message_str)
+    if log_frag:
+        tr = log_class_for_challenge(uid, log_frag)
+        if tr.get("success"):
+            return (_format_log_class_success_reply(tr, log_frag), None)
+        if tr.get("reason") == "not_enrolled":
+            ct = tr.get("challenge_title") or log_frag
+            return (
+                f"You're not enrolled in {ct} yet. Want me to enroll you first? "
+                f"Say yes when you are ready.",
+                ct,
+            )
+        if tr.get("reason") == "already_completed":
+            ct = tr.get("challenge_title") or log_frag
+            return (
+                f"You already completed {ct}. Try logging toward another active challenge, "
+                f"or enroll in something new from the Challenges tab.",
+                None,
+            )
+        cat = _catalog_active_challenge_names()
+        return (
+            f"I could not match that to a challenge name. Open challenges right now: {cat}.",
+            None,
+        )
+
+    enroll_frag = _extract_enroll_challenge_title(message_str)
+    if enroll_frag:
+        er = enroll_in_challenge(uid, enroll_frag)
+        return (er["message"], None)
+
+    redeem_frag = _extract_redeem_reward_title(message_str)
+    if redeem_frag:
+        rr = redeem_reward_for_user(uid, redeem_frag)
+        if rr.get("success"):
+            return (
+                f"Redeemed {rr['reward_title']}! Your code is {rr['code']}. "
+                f"Save it for checkout.",
+                None,
+            )
+        return (rr.get("message") or KASHE_CHAT_HELP_PROMPT, None)
+
+    if _extract_weekly_plan_intent(message_str):
+        plan_data = suggest_weekly_plan(uid)
+        return (_format_weekly_plan_reply(plan_data), None)
+
+    if _extract_pace_intent(message_str):
+        pace_data = analyze_weekly_pace(uid)
+        return (_format_pace_reply(pace_data.get("pace_analysis") or []), None)
+
+    if _extract_motivation_intent(message_str):
+        ctx = get_motivational_context(uid)
+        return (_format_motivation_reply(ctx), None)
+
+    return None
+
+
+def _gemini_reply_text(user_id, message_str: str, history) -> str:
+    """Non-streaming Gemini reply (tools enabled)."""
+    contents = _chat_history_to_contents(history or [], message_str)
+    if not contents:
+        return ""
+
+    system_instruction = CHAT_SYSTEM_INSTRUCTION.format(
+        authenticated_user_id=user_id
+    )
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+    def _run_model():
+        return client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                tools=GEMINI_CHAT_TOOLS,
+            ),
+        )
+
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(_run_model)
+        response = fut.result(timeout=GEMINI_CHAT_GENERATE_TIMEOUT_SEC)
+
+    reply = (response.text or "").strip()
+    if _looks_unhelpful_gemini_reply(reply):
+        reply = KASHE_CHAT_HELP_PROMPT
+    return reply
+
+
+def _gemini_text_chunks(user_id, message_str: str, history):
+    """Yield Gemini text chunks; falls back to chunked full response on stream errors."""
+    contents = _chat_history_to_contents(history or [], message_str)
+    if not contents:
+        return
+
+    system_instruction = CHAT_SYSTEM_INSTRUCTION.format(
+        authenticated_user_id=user_id
+    )
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    config = types.GenerateContentConfig(
+        system_instruction=system_instruction,
+        tools=GEMINI_CHAT_TOOLS,
+    )
+
+    try:
+        stream = client.models.generate_content_stream(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=config,
+        )
+        saw_text = False
+        for chunk in stream:
+            text = getattr(chunk, "text", None) or ""
+            if text:
+                saw_text = True
+                yield text
+        if saw_text:
+            return
+    except Exception as err:
+        print(f"Gemini stream error: {err}")
+
+    try:
+        reply = _gemini_reply_text(user_id, message_str, history)
+        yield from _iter_sse_text_chunks(reply)
+    except FuturesTimeout:
+        yield from _iter_sse_text_chunks(KASHE_CHAT_TECH_BLIP)
+    except Exception as err:
+        print(f"Gemini fallback error: {err}")
+        yield from _iter_sse_text_chunks(KASHE_CHAT_TECH_BLIP)
+
+
+def _chat_sse_generator(
+    uid: str, user_id, message_str: str, history, pending_challenge_title: str
+):
+    """SSE stream: meta (optional) → text chunks → [DONE]."""
+    try:
+        resolved = _compute_chat_reply_or_none(
+            uid, message_str, history, pending_challenge_title
+        )
+
+        if resolved is not None:
+            reply, pending_out = resolved
+            if pending_out:
+                yield _sse_payload_line(
+                    {"meta": {"pending_challenge_title": pending_out}}
+                )
+            for piece in _iter_sse_text_chunks(reply):
+                yield _sse_payload_line({"chunk": piece})
+            yield "data: [DONE]\n\n"
+            return
+
+        contents = _chat_history_to_contents(history or [], message_str)
+        if not contents:
+            yield _sse_payload_line({"error": "message is required"})
+            yield "data: [DONE]\n\n"
+            return
+
+        for piece in _gemini_text_chunks(user_id, message_str, history):
+            yield _sse_payload_line({"chunk": piece})
+        yield "data: [DONE]\n\n"
+    except FuturesTimeout:
+        for piece in _iter_sse_text_chunks(KASHE_CHAT_TECH_BLIP):
+            yield _sse_payload_line({"chunk": piece})
+        yield "data: [DONE]\n\n"
+    except Exception as err:
+        print(f"Chat stream error: {err}")
+        for piece in _iter_sse_text_chunks(KASHE_CHAT_TECH_BLIP):
+            yield _sse_payload_line({"chunk": piece})
+        yield "data: [DONE]\n\n"
+
+
 @app.route("/api/chat/context", methods=["GET"])
 @jwt_required()
 def chat_context():
@@ -1436,8 +2022,8 @@ def chat_greeting():
         greeting = (response.text or "").strip()
         if not greeting:
             greeting = (
-                f"Hi {user_first}! I am your Kashé coach. "
-                "Ask me about your points, challenges, or anything fitness related!"
+                f"Hi {user_first}, I'm Kai! "
+                "Ask me to plan your week, check your pace, or log a class toward any challenge."
             )
         return jsonify({"greeting": greeting}), 200
     except Exception as err:
@@ -1445,125 +2031,86 @@ def chat_greeting():
         return jsonify({"error": f"Greeting service error: {str(err)}"}), 500
 
 
+def _parse_chat_request_body(data):
+    """Validate chat POST body; returns (message_str, history, pending_title) or error response."""
+    message = data.get("message")
+    history = data.get("history")
+
+    if not message or not str(message).strip():
+        return None, (jsonify({"error": "message is required"}), 400)
+
+    if history is not None and not isinstance(history, list):
+        return None, (jsonify({"error": "history must be an array when provided"}), 400)
+
+    message_str = str(message).strip()
+    pending_raw = (data.get("pending_challenge_title") or "").strip()
+    pending_challenge_title = _normalize_challenge_name_fragment(pending_raw)
+    return (message_str, history, pending_challenge_title), None
+
+
 @app.route('/api/chat', methods=['POST'])
 @jwt_required()
 def chat():
     """Chat: deterministic handlers for common intents, then Gemini with tools."""
     data = request.get_json() or {}
-    message = data.get("message")
-    history = data.get("history")
+    parsed, err = _parse_chat_request_body(data)
+    if err:
+        return err
 
-    if not message or not str(message).strip():
-        return jsonify({"error": "message is required"}), 400
-
-    if history is not None and not isinstance(history, list):
-        return jsonify({"error": "history must be an array when provided"}), 400
-
+    message_str, history, pending_challenge_title = parsed
     user_id = get_jwt_identity()
     uid = str(user_id)
-    message_str = str(message).strip()
-
-    pending_raw = (data.get("pending_challenge_title") or "").strip()
-    pending_challenge_title = _normalize_challenge_name_fragment(pending_raw)
 
     def _ok(reply: str, pending=None):
         return jsonify(
             {"reply": reply, "pending_challenge_title": pending}
         ), 200
 
-    if pending_challenge_title and _is_affirmative_message(message_str):
-        en = enroll_in_challenge(uid, pending_challenge_title)
-        if not en.get("success"):
-            low = (en.get("message") or "").lower()
-            if "already enrolled" not in low:
-                return _ok(en["message"], pending_challenge_title)
-
-        prefix = (en["message"] + " ") if en.get("success") else ""
-        loc = log_class_for_challenge(uid, pending_challenge_title)
-        if loc.get("success"):
-            return _ok(
-                prefix + _format_log_class_success_reply(loc, pending_challenge_title),
-                None,
-            )
-        return _ok(prefix + (loc.get("message") or "Could not log that class."), None)
-
-    log_frag = _extract_log_class_challenge_title(message_str)
-    if log_frag:
-        tr = log_class_for_challenge(uid, log_frag)
-        if tr.get("success"):
-            return _ok(_format_log_class_success_reply(tr, log_frag), None)
-        if tr.get("reason") == "not_enrolled":
-            ct = tr.get("challenge_title") or log_frag
-            return _ok(
-                f"You're not enrolled in {ct} yet. Want me to enroll you first? "
-                f"Say yes when you are ready.",
-                ct,
-            )
-        if tr.get("reason") == "already_completed":
-            ct = tr.get("challenge_title") or log_frag
-            return _ok(
-                f"You already completed {ct}. Try logging toward another active challenge, "
-                f"or enroll in something new from the Challenges tab.",
-                None,
-            )
-        cat = _catalog_active_challenge_names()
-        return _ok(
-            f"I could not match that to a challenge name. Open challenges right now: {cat}.",
-            None,
-        )
-
-    enroll_frag = _extract_enroll_challenge_title(message_str)
-    if enroll_frag:
-        er = enroll_in_challenge(uid, enroll_frag)
-        return _ok(er["message"], None)
-
-    redeem_frag = _extract_redeem_reward_title(message_str)
-    if redeem_frag:
-        rr = redeem_reward_for_user(uid, redeem_frag)
-        if rr.get("success"):
-            return _ok(
-                f"Redeemed {rr['reward_title']}! Your code is {rr['code']}. "
-                f"Save it for checkout.",
-                None,
-            )
-        return _ok(rr.get("message") or KASHE_CHAT_HELP_PROMPT, None)
+    resolved = _compute_chat_reply_or_none(
+        uid, message_str, history, pending_challenge_title
+    )
+    if resolved is not None:
+        reply, pending_out = resolved
+        return _ok(reply, pending_out)
 
     contents = _chat_history_to_contents(history or [], message_str)
     if not contents:
         return jsonify({"error": "message is required"}), 400
 
-    system_instruction = CHAT_SYSTEM_INSTRUCTION.format(
-        authenticated_user_id=user_id
-    )
-
     try:
-        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
-        def _run_model():
-            return client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    tools=GEMINI_CHAT_TOOLS,
-                ),
-            )
-
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            fut = ex.submit(_run_model)
-            try:
-                response = fut.result(timeout=GEMINI_CHAT_GENERATE_TIMEOUT_SEC)
-            except FuturesTimeout:
-                return _ok(KASHE_CHAT_TECH_BLIP, None)
-
-        reply = (response.text or "").strip()
-        if _looks_unhelpful_gemini_reply(reply):
-            reply = KASHE_CHAT_HELP_PROMPT
+        reply = _gemini_reply_text(user_id, message_str, history)
         return _ok(reply, None)
-
+    except FuturesTimeout:
+        return _ok(KASHE_CHAT_TECH_BLIP, None)
     except Exception as err:
         print(f"Chat error: {str(err)}")
         return _ok(KASHE_CHAT_TECH_BLIP, None)
+
+
+@app.route('/api/chat/stream', methods=['POST'])
+@jwt_required()
+def chat_stream():
+    """Chat over Server-Sent Events — same logic as /api/chat with streamed tokens."""
+    data = request.get_json() or {}
+    parsed, err = _parse_chat_request_body(data)
+    if err:
+        return err
+
+    message_str, history, pending_challenge_title = parsed
+    user_id = get_jwt_identity()
+    uid = str(user_id)
+
+    return Response(
+        stream_with_context(
+            _chat_sse_generator(uid, user_id, message_str, history, pending_challenge_title)
+        ),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 if __name__ == "__main__":

@@ -10,12 +10,12 @@ const CHAT_REQUEST_TIMEOUT_MS = 85000;
 
 const DEFAULT_WELCOME = {
   id: 0,
-  text: "Hi! I'm your Kashé coach. Ask me about your points, challenges, or anything fitness related!",
+  text: "Hi! I'm Kai, your Kashé fitness coach. Ask me to plan your week, check your pace, log a class, or redeem rewards!",
   sender: 'ai',
 };
 
 const KASHE_HELP_FALLBACK_REPLY =
-  "I can help you log classes, check your points, enroll in challenges, or redeem rewards. What would you like?";
+  "I can help you plan your week, check if you are on pace, log classes, enroll in challenges, or redeem rewards. What would you like?";
 
 function readStoredChat() {
   if (typeof sessionStorage === 'undefined') return null;
@@ -30,7 +30,8 @@ function readStoredChat() {
         typeof m === 'object' &&
         typeof m.text === 'string' &&
         (m.sender === 'user' || m.sender === 'ai') &&
-        !m.isThinking
+        !m.isThinking &&
+        !m.isStreaming
     );
     return valid.length > 0 ? valid : null;
   } catch {
@@ -90,6 +91,79 @@ function isAffirmativeForPending(text) {
   );
 }
 
+/**
+ * Read SSE from POST /api/chat/stream; invoke onChunk for each text piece.
+ */
+async function consumeChatStream({ body, token, signal, onChunk, onMeta }) {
+  const response = await fetch('http://127.0.0.1:5000/api/chat/stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (!response.ok) {
+    let errMsg = `Something went wrong (${response.status}). ${KASHE_HELP_FALLBACK_REPLY}`;
+    try {
+      const errData = await response.json();
+      if (errData.error) errMsg = errData.error;
+    } catch {
+      // not JSON
+    }
+    throw new Error(errMsg);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error('Streaming is not supported in this browser.');
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() || '';
+
+    for (const part of parts) {
+      const line = part
+        .split('\n')
+        .map((l) => l.trim())
+        .find((l) => l.startsWith('data:'));
+      if (!line) continue;
+
+      const payload = line.replace(/^data:\s*/, '');
+      if (payload === '[DONE]') {
+        return;
+      }
+
+      let parsed;
+      try {
+        parsed = JSON.parse(payload);
+      } catch {
+        continue;
+      }
+
+      if (parsed.error) {
+        throw new Error(parsed.error);
+      }
+      if (parsed.meta && onMeta) {
+        onMeta(parsed.meta);
+      }
+      if (typeof parsed.chunk === 'string' && parsed.chunk.length > 0) {
+        onChunk(parsed.chunk);
+      }
+    }
+  }
+}
+
 function Chat({ setIsAuthenticated }) {
   const [messages, setMessages] = useState(() => readStoredChat() ?? null);
   const [greetingLoading, setGreetingLoading] = useState(() => !readStoredChat());
@@ -97,7 +171,6 @@ function Chat({ setIsAuthenticated }) {
   const [loading, setLoading] = useState(false);
   const [inputHint, setInputHint] = useState('');
   const messagesEndRef = useRef(null);
-  /** Bumps on each greeting fetch so overlapping requests cannot overwrite a newer run. */
   const greetingFetchGenRef = useRef(0);
 
   const loadFreshGreeting = useCallback(async () => {
@@ -127,7 +200,7 @@ function Chat({ setIsAuthenticated }) {
 
   useEffect(() => {
     if (!messages || greetingLoading) return;
-    const persistable = messages.filter((m) => !m.isThinking);
+    const persistable = messages.filter((m) => !m.isThinking && !m.isStreaming);
     try {
       sessionStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(persistable));
     } catch {
@@ -170,17 +243,24 @@ function Chat({ setIsAuthenticated }) {
       setPendingLogChallenge(null);
     }
 
+    let aiMessageId;
     setMessages((prev) => {
       const maxId = prev.reduce(
         (m, x) => (typeof x.id === 'number' && x.id > m ? x.id : m),
         -1
       );
       const userId = maxId + 1;
-      const thinkingId = maxId + 2;
+      aiMessageId = maxId + 2;
       return [
         ...prev,
         { id: userId, text: trimmed, sender: 'user' },
-        { id: thinkingId, text: 'thinking...', sender: 'ai', isThinking: true },
+        {
+          id: aiMessageId,
+          text: '',
+          sender: 'ai',
+          isThinking: true,
+          isStreaming: false,
+        },
       ];
     });
     setInputValue('');
@@ -188,7 +268,7 @@ function Chat({ setIsAuthenticated }) {
     setLoading(true);
 
     const history = messages
-      .filter((m) => !m.isThinking)
+      .filter((m) => !m.isThinking && !m.isStreaming)
       .map((m) => ({
         role: m.sender === 'user' ? 'user' : 'model',
         text: m.text,
@@ -196,6 +276,26 @@ function Chat({ setIsAuthenticated }) {
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), CHAT_REQUEST_TIMEOUT_MS);
+
+    const beginStreaming = () => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === aiMessageId
+            ? { ...m, isThinking: false, isStreaming: true, text: '' }
+            : m
+        )
+      );
+    };
+
+    const appendChunk = (chunk) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === aiMessageId ? { ...m, text: (m.text || '') + chunk } : m
+        )
+      );
+    };
+
+    let streamed = false;
 
     try {
       const token = localStorage.getItem('token');
@@ -205,64 +305,48 @@ function Chat({ setIsAuthenticated }) {
         ...(pendingChallengeTitle ? { pending_challenge_title: pendingChallengeTitle } : {}),
       };
 
-      let response = await fetch('http://127.0.0.1:5000/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(body),
+      await consumeChatStream({
+        body,
+        token,
         signal: controller.signal,
+        onMeta: (meta) => {
+          if (!meta || !('pending_challenge_title' in meta)) return;
+          const next = meta.pending_challenge_title;
+          if (next && String(next).trim()) {
+            setPendingLogChallenge(String(next).trim());
+          } else {
+            setPendingLogChallenge(null);
+          }
+        },
+        onChunk: (chunk) => {
+          if (!streamed) {
+            streamed = true;
+            beginStreaming();
+          }
+          appendChunk(chunk);
+        },
       });
 
-      let data;
-      try {
-        data = await response.json();
-      } catch {
-        data = {};
-      }
-
-      if (!response.ok) {
-        const errText =
-          data.error ||
-          `Something went wrong (${response.status}). ${KASHE_HELP_FALLBACK_REPLY}`;
-        throw new Error(errText);
-      }
-
-      let replyText =
-        typeof data.reply === 'string'
-          ? data.reply.trim()
-          : '';
-      if (
-        replyText.includes("didn't understand") ||
-        replyText.includes('did not understand') ||
-        !replyText
-      ) {
-        replyText = replyText.replace(/sorry[^.]*\.?\s*/gi, '').trim() || '';
-        replyText =
-          replyText || data.error?.trim?.() || KASHE_HELP_FALLBACK_REPLY;
-      }
-
-      const nextPending =
-        typeof data.pending_challenge_title === 'string'
-          ? data.pending_challenge_title.trim()
-          : data.pending_challenge_title;
-      if (nextPending) {
-        setPendingLogChallenge(nextPending);
-      } else {
-        setPendingLogChallenge(null);
+      if (!streamed) {
+        beginStreaming();
       }
 
       setMessages((prev) => {
-        const updated = [...prev];
-        const last = updated[updated.length - 1];
-        if (!last?.isThinking) return prev;
-        updated[updated.length - 1] = {
-          ...last,
-          text: replyText,
-          isThinking: false,
-        };
-        return updated;
+        const current = prev.find((m) => m.id === aiMessageId);
+        let text = (current?.text || '').trim();
+        if (
+          text.includes("didn't understand") ||
+          text.includes('did not understand') ||
+          !text
+        ) {
+          text = text.replace(/sorry[^.]*\.?\s*/gi, '').trim() || '';
+          text = text || KASHE_HELP_FALLBACK_REPLY;
+        }
+        return prev.map((m) =>
+          m.id === aiMessageId
+            ? { ...m, text, isThinking: false, isStreaming: false }
+            : m
+        );
       });
     } catch (err) {
       const abort = err?.name === 'AbortError';
@@ -271,17 +355,18 @@ function Chat({ setIsAuthenticated }) {
         : (err.message && String(err.message).trim()) ||
           'Connection issue. Double-check your network and try again.';
 
-      setMessages((prev) => {
-        const updated = [...prev];
-        const last = updated[updated.length - 1];
-        if (!last?.isThinking) return prev;
-        updated[updated.length - 1] = {
-          ...last,
-          text: `${text}\n\n${KASHE_HELP_FALLBACK_REPLY}`,
-          isThinking: false,
-        };
-        return updated;
-      });
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === aiMessageId
+            ? {
+                ...m,
+                text: `${text}\n\n${KASHE_HELP_FALLBACK_REPLY}`,
+                isThinking: false,
+                isStreaming: false,
+              }
+            : m
+        )
+      );
     } finally {
       clearTimeout(timeoutId);
       setLoading(false);
@@ -300,6 +385,7 @@ function Chat({ setIsAuthenticated }) {
   return (
     <div className="chat-container">
       <div className="chat-header">
+        <p className="chat-coach-title">Kai · Kashé fitness coach</p>
         <button
           type="button"
           className="chat-new-btn"
@@ -321,9 +407,16 @@ function Chat({ setIsAuthenticated }) {
               key={msg.id}
               className={`message-bubble ${msg.sender} ${
                 msg.isThinking ? 'thinking' : ''
-              }`}
+              } ${msg.isStreaming ? 'streaming' : ''}`}
             >
-              {msg.text}
+              {msg.isThinking ? (
+                <span className="thinking-dots">thinking</span>
+              ) : (
+                <span className="message-text">
+                  {msg.text}
+                  {msg.isStreaming && <span className="stream-cursor" aria-hidden />}
+                </span>
+              )}
             </div>
           ))}
         <div ref={messagesEndRef} />
@@ -336,7 +429,7 @@ function Chat({ setIsAuthenticated }) {
             <input
               type="text"
               className="message-input"
-              placeholder="Ask me anything..."
+              placeholder="Plan my week, check my pace, log a class..."
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyPress={handleKeyPress}

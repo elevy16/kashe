@@ -7,12 +7,24 @@
 
 .chat-header {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
   align-items: center;
+  gap: 12px;
   padding: 12px 20px 0;
   max-width: 390px;
   margin: 0 auto;
   width: 100%;
+}
+
+.chat-coach-title {
+  margin: 0;
+  font-family: 'Playfair Display', serif;
+  font-size: 15px;
+  font-weight: 600;
+  color: #2d2d2d;
+  letter-spacing: 0.02em;
+  flex: 1;
+  min-width: 0;
 }
 
 .chat-new-btn {
@@ -61,8 +73,13 @@
   padding: 12px 16px;
   border-radius: 16px;
   word-wrap: break-word;
-  line-height: 1.4;
+  line-height: 1.55;
   font-size: 15px;
+}
+
+.message-text {
+  display: inline;
+  white-space: pre-wrap;
 }
 
 .message-bubble.user {
@@ -81,9 +98,26 @@
 }
 
 .message-bubble.thinking {
-  font-style: italic;
   color: #888888;
+}
+
+.thinking-dots {
+  font-style: italic;
   animation: pulse 1.5s ease-in-out infinite;
+}
+
+.message-bubble.streaming {
+  border-color: #d4e8df;
+}
+
+.stream-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background-color: #8baf9f;
+  animation: cursor-blink 1s step-end infinite;
 }
 
 @keyframes pulse {
@@ -92,6 +126,15 @@
   }
   50% {
     opacity: 1;
+  }
+}
+
+@keyframes cursor-blink {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
   }
 }
 
