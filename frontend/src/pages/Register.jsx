@@ -28,7 +28,22 @@ function Register({ setIsAuthenticated }) {
       });
       const data = await response.json();
       if (response.ok) {
-        navigate('/');
+        const loginResponse = await fetch('http://127.0.0.1:5000/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email.trim(), password }),
+        });
+        const loginData = await loginResponse.json();
+        if (loginResponse.ok) {
+          localStorage.setItem('token', loginData.token);
+          localStorage.setItem('name', loginData.name);
+          localStorage.setItem('email', loginData.email);
+          localStorage.setItem('created_at', loginData.created_at);
+          setIsAuthenticated(true);
+          navigate('/onboarding');
+        } else {
+          navigate('/');
+        }
       } else {
         setError(data.error || 'Registration failed');
       }
@@ -61,7 +76,7 @@ function Register({ setIsAuthenticated }) {
         localStorage.setItem('email', data.email);
         localStorage.setItem('created_at', data.created_at);
         setIsAuthenticated(true);
-        navigate('/home');
+        navigate('/onboarding');
       } else {
         setError(data.error || 'Google sign-in failed');
       }

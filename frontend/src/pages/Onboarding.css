@@ -1,0 +1,224 @@
+.onboarding-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.onboarding-overlay--welcome {
+  background: linear-gradient(135deg, #e8f5e1 0%, #f0e6f6 50%, #fce4ec 100%);
+}
+
+.onboarding-skip {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 10;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  font-family: 'Inter', sans-serif;
+  font-size: 15px;
+  font-weight: 500;
+  color: #888888;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: color 0.2s ease, background-color 0.2s ease;
+}
+
+.onboarding-slide--gradient .onboarding-skip {
+  color: #666666;
+}
+
+.onboarding-skip:hover {
+  color: #2d2d2d;
+  background-color: rgba(255, 255, 255, 0.4);
+}
+
+.onboarding-viewport {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+.onboarding-track {
+  display: flex;
+  height: 100%;
+  transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform;
+}
+
+.onboarding-slide {
+  flex: 0 0 100%;
+  width: 100%;
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 72px 24px 24px;
+  box-sizing: border-box;
+}
+
+.onboarding-slide--gradient {
+  background: linear-gradient(135deg, #e8f5e1 0%, #f0e6f6 50%, #fce4ec 100%);
+}
+
+.onboarding-slide--light {
+  background: #ffffff;
+}
+
+.onboarding-slide-inner {
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.onboarding-logo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 40px;
+}
+
+.onboarding-logo-diamond {
+  font-size: 56px;
+  line-height: 1;
+  color: #8baf9f;
+}
+
+.onboarding-logo-name {
+  font-family: 'Playfair Display', serif;
+  font-size: 36px;
+  font-weight: 700;
+  color: #2d2d2d;
+  letter-spacing: 0.5px;
+}
+
+.onboarding-step-icon {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 32px;
+  border-radius: 50%;
+  border: 2px solid #8baf9f;
+  color: #8baf9f;
+  font-family: 'Inter', sans-serif;
+  font-size: 22px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  letter-spacing: 0.02em;
+}
+
+.onboarding-heading {
+  font-family: 'Playfair Display', serif;
+  font-size: 32px;
+  font-weight: 600;
+  color: #2d2d2d;
+  margin: 0 0 20px;
+  line-height: 1.2;
+}
+
+.onboarding-subtext {
+  font-family: 'Inter', sans-serif;
+  font-size: 18px;
+  line-height: 1.55;
+  color: #666666;
+  margin: 0;
+  max-width: 420px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.onboarding-footer {
+  flex-shrink: 0;
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 16px 24px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  background: transparent;
+}
+
+.onboarding-dots {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.onboarding-dot {
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid #cccccc;
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background-color 0.25s ease,
+    border-color 0.25s ease,
+    transform 0.2s ease;
+}
+
+.onboarding-dot--active {
+  background-color: #8baf9f;
+  border-color: #8baf9f;
+  transform: scale(1.1);
+}
+
+.onboarding-dot:hover:not(.onboarding-dot--active) {
+  border-color: #8baf9f;
+}
+
+.onboarding-counter {
+  margin: 0;
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  color: #888888;
+  letter-spacing: 0.04em;
+}
+
+.onboarding-next {
+  width: 100%;
+  min-height: 52px;
+  margin-top: 4px;
+  padding: 0 24px;
+  border: none;
+  border-radius: 12px;
+  background-color: #8baf9f;
+  color: #ffffff;
+  font-family: 'Inter', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.onboarding-next:hover {
+  background-color: #7a9d8d;
+}
+
+.onboarding-next:active {
+  background-color: #6a8d7d;
+}
+
+@media (min-width: 768px) {
+  .onboarding-skip {
+    top: 32px;
+    right: 32px;
+  }
+
+  .onboarding-footer {
+    padding-bottom: 48px;
+  }
+}
