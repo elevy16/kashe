@@ -8,6 +8,8 @@ import ChallengeDetail from './pages/ChallengeDetail';
 import Rewards from './pages/Rewards';
 import Chat from './pages/Chat';
 import Profile from './pages/Profile';
+import Onboarding from './pages/Onboarding';
+import { hasSeenOnboarding } from './utils/onboarding';
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('token'));
@@ -31,7 +33,30 @@ function App() {
       <Routes>
         <Route path="/" element={<Login setIsAuthenticated={setIsAuthenticated} />} />
         <Route path="/register" element={<Register setIsAuthenticated={setIsAuthenticated} />} />
-        <Route path="/home" element={isAuthenticated ? <Home setIsAuthenticated={setIsAuthenticated} /> : <Navigate to="/" />} />
+        <Route
+          path="/onboarding"
+          element={
+            isAuthenticated ? (
+              hasSeenOnboarding() ? (
+                <Navigate to="/home" replace />
+              ) : (
+                <Onboarding />
+              )
+            ) : (
+              <Navigate to="/" replace />
+            )
+          }
+        />
+        <Route
+          path="/home"
+          element={
+            isAuthenticated ? (
+              <Home setIsAuthenticated={setIsAuthenticated} />
+            ) : (
+              <Navigate to="/" />
+            )
+          }
+        />
         <Route path="/challenges" element={isAuthenticated ? <Challenges /> : <Navigate to="/" />} />
         <Route path="/challenges/:id" element={isAuthenticated ? <ChallengeDetail /> : <Navigate to="/" />} />
         <Route path="/rewards" element={isAuthenticated ? <Rewards /> : <Navigate to="/" />} />
