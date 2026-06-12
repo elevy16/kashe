@@ -142,7 +142,7 @@ contents are uploaded to the S3 bucket (static website hosting enabled).
 
 **![Home screen — live on AWS](docs/screenshots/home-live.png)**
 
-**![AI coach calling the live weather API](docs/screenshots/chat-weather.png)**
+**![AI coach calling the live weather API](docs/screenshots/chat-api-weather.png)**
 
 **![Reward redemption with unique code](docs/screenshots/reward-code.png)**
 
