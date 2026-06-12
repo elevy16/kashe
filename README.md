@@ -138,18 +138,23 @@ contents are uploaded to the S3 bucket (static website hosting enabled).
 
 ## Screenshots
 
-**Live deployed app** (served from S3, talking to Flask on EC2):
+**Live deployed app (served from S3, talking to Flask on EC2):**
 
-Home screen — live on AWS
-AI coach calling the live weather API
-Reward redemption with unique code
+**![Home screen — live on AWS](docs/screenshots/home-live.png)**
+
+**![AI coach calling the live weather API](docs/screenshots/chat-weather.png)**
+
+**![Reward redemption with unique code](docs/screenshots/reward-code.png)**
 
 **AWS infrastructure:**
 
-Flask API health check on EC2
-EC2 instance running
-RDS PostgreSQL available
-S3 static site bucket
+**![Flask API health check on EC2](docs/screenshots/api-health.png)**
+
+**![EC2 instance running](docs/screenshots/ec2.png)**
+
+**![RDS PostgreSQL available](docs/screenshots/rds.png)**
+
+**![S3 static site bucket](docs/screenshots/s3.png)**
 
 ## Project Documents
 
