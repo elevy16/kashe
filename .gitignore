@@ -1,3 +1,6 @@
+__pycache__/
+*.pyc
+backend/instance/
 .env
-frontend/.env
-backend/serviceAccount.json
+*.pem
+serviceAccount.json

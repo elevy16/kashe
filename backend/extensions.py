@@ -5,4 +5,4 @@ from flask_socketio import SocketIO
 
 db = SQLAlchemy()
 jwt = JWTManager()
-socketio = SocketIO(cors_allowed_origins="*")
+socketio = SocketIO()

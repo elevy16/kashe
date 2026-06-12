@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
+import { API_BASE } from '../api';
 import './Home.css';
 
 function Home({ setIsAuthenticated }) {
@@ -17,14 +18,14 @@ function Home({ setIsAuthenticated }) {
       const token = localStorage.getItem('token');
 
       // Fetch balance
-      const rewardsResponse = await fetch('http://127.0.0.1:5000/api/rewards', {
+      const rewardsResponse = await fetch(`${API_BASE}/api/rewards`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       const rewardsData = await rewardsResponse.json();
       setBalance(rewardsData.balance || 0);
 
       // Fetch enrolled challenges
-      const enrollmentsResponse = await fetch('http://127.0.0.1:5000/api/enrollments', {
+      const enrollmentsResponse = await fetch(`${API_BASE}/api/enrollments`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       if (!enrollmentsResponse.ok) {
@@ -49,7 +50,7 @@ function Home({ setIsAuthenticated }) {
 
     const pollEnrollments = async () => {
       try {
-        const res = await fetch('http://127.0.0.1:5000/api/enrollments', {
+        const res = await fetch(`${API_BASE}/api/enrollments`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (!res.ok) return;

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Navbar from '../components/Navbar';
+import { API_BASE } from '../api';
 import './Chat.css';
 
 const CHAT_STORAGE_KEY = 'kashe_chat_history';
@@ -64,7 +65,7 @@ async function fetchPersonalizedGreeting() {
   const controller = new AbortController();
   const to = setTimeout(() => controller.abort(), GREETING_TIMEOUT_MS);
   try {
-    const response = await fetch('http://127.0.0.1:5000/api/chat/greeting', {
+    const response = await fetch(`${API_BASE}/api/chat/greeting`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -95,7 +96,7 @@ function isAffirmativeForPending(text) {
  * Read SSE from POST /api/chat/stream; invoke onChunk for each text piece.
  */
 async function consumeChatStream({ body, token, signal, onChunk, onMeta }) {
-  const response = await fetch('http://127.0.0.1:5000/api/chat/stream', {
+  const response = await fetch(`${API_BASE}/api/chat/stream`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

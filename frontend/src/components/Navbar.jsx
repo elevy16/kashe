@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { API_BASE } from '../api';
 
 function Navbar({ setIsAuthenticated }) {
   const location = useLocation();
@@ -15,7 +16,7 @@ function Navbar({ setIsAuthenticated }) {
 
     const pollRewards = async () => {
       try {
-        const res = await fetch('http://127.0.0.1:5000/api/rewards', {
+        const res = await fetch(`${API_BASE}/api/rewards`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (!res.ok) return;

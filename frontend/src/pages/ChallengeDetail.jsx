@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import confetti from 'canvas-confetti';
 import Navbar from '../components/Navbar';
+import { API_BASE } from '../api';
 import './ChallengeDetail.css';
 
 function ChallengeDetail() {
@@ -32,10 +33,10 @@ function ChallengeDetail() {
       const token = localStorage.getItem('token');
 
       const [challengeResponse, enrollmentsResponse] = await Promise.all([
-        fetch(`http://127.0.0.1:5000/api/challenges/${id}`, {
+        fetch(`${API_BASE}/api/challenges/${id}`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
-        fetch('http://127.0.0.1:5000/api/enrollments', {
+        fetch(`${API_BASE}/api/enrollments`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
       ]);
@@ -69,7 +70,7 @@ function ChallengeDetail() {
       setActionLoading(true);
       const token = localStorage.getItem('token');
 
-      const response = await fetch('http://127.0.0.1:5000/api/enroll', {
+      const response = await fetch(`${API_BASE}/api/enroll`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -97,7 +98,7 @@ function ChallengeDetail() {
       setActionLoading(true);
       const token = localStorage.getItem('token');
 
-      const response = await fetch('http://127.0.0.1:5000/api/checkin', {
+      const response = await fetch(`${API_BASE}/api/checkin`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

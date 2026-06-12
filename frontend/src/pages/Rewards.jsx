@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import Navbar from '../components/Navbar';
+import { API_BASE } from '../api';
 import './Rewards.css';
 
 function Rewards() {
@@ -16,7 +17,7 @@ function Rewards() {
       setError(null);
       const token = localStorage.getItem('token');
 
-      const response = await fetch('http://127.0.0.1:5000/api/rewards', {
+      const response = await fetch(`${API_BASE}/api/rewards`, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -46,7 +47,7 @@ function Rewards() {
       setSuccessMessage(null);
       const token = localStorage.getItem('token');
 
-      const response = await fetch('http://127.0.0.1:5000/api/redeem', {
+      const response = await fetch(`${API_BASE}/api/redeem`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
+import { API_BASE } from '../api';
 import './Challenges.css';
 
 function Challenges() {
@@ -16,7 +17,7 @@ function Challenges() {
   const loadChallengesAndEnrollments = useCallback(async () => {
     const token = localStorage.getItem('token');
 
-    const challengesResponse = await fetch('http://127.0.0.1:5000/api/challenges', {
+    const challengesResponse = await fetch(`${API_BASE}/api/challenges`, {
       headers: { Authorization: `Bearer ${token}` },
     });
 
@@ -27,7 +28,7 @@ function Challenges() {
     const challengesData = await challengesResponse.json();
     setChallenges(challengesData || []);
 
-    const enrollmentsResponse = await fetch('http://127.0.0.1:5000/api/enrollments', {
+    const enrollmentsResponse = await fetch(`${API_BASE}/api/enrollments`, {
       headers: { Authorization: `Bearer ${token}` },
     });
 
@@ -61,7 +62,7 @@ function Challenges() {
       setEnrollingId(challengeId);
       const token = localStorage.getItem('token');
 
-      const response = await fetch('http://127.0.0.1:5000/api/enroll', {
+      const response = await fetch(`${API_BASE}/api/enroll`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -35,7 +35,15 @@ _DEFAULT_SQLITE_URI = "sqlite:///" + (_INSTANCE_DIR / "kashe_dev.db").resolve().
 
 app = Flask(__name__)
 
-CORS(app, origins=["http://localhost:5173", "http://127.0.0.1:5173"])
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",")
+    if origin.strip()
+]
+
+CORS(app, origins=cors_origins)
 
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
     "DATABASE_URL", _DEFAULT_SQLITE_URI
@@ -48,7 +56,7 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 # Initialize extensions
 db.init_app(app)
 jwt.init_app(app)
-socketio.init_app(app)
+socketio.init_app(app, cors_allowed_origins=cors_origins)
 
 # Import models after extensions are initialized to avoid circular imports
 import models  # noqa: F401

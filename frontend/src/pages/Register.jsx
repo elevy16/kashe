@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import './Register.css';
 import { signInWithPopup } from 'firebase/auth';
 import { auth, GoogleAuthProvider } from '../firebase';
+import { API_BASE } from '../api';
 
 const googleProvider = new GoogleAuthProvider();
 
@@ -17,7 +18,7 @@ function Register({ setIsAuthenticated }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const response = await fetch('http://127.0.0.1:5000/api/register', {
+      const response = await fetch(`${API_BASE}/api/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -28,7 +29,7 @@ function Register({ setIsAuthenticated }) {
       });
       const data = await response.json();
       if (response.ok) {
-        const loginResponse = await fetch('http://127.0.0.1:5000/api/login', {
+        const loginResponse = await fetch(`${API_BASE}/api/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email: email.trim(), password }),
@@ -58,7 +59,7 @@ function Register({ setIsAuthenticated }) {
     try {
       const result = await signInWithPopup(auth, googleProvider);
       const idToken = await result.user.getIdToken();
-      const response = await fetch('http://127.0.0.1:5000/api/auth/google', {
+      const response = await fetch(`${API_BASE}/api/auth/google`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: idToken }),

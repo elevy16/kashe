@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import Navbar from '../components/Navbar';
+import { API_BASE } from '../api';
 import './Profile.css';
 
 function Profile() {
@@ -27,19 +28,19 @@ function Profile() {
       const created_at = localStorage.getItem('created_at') || '';
 
       // Fetch balance
-      const rewardsResponse = await fetch('http://127.0.0.1:5000/api/rewards', {
+      const rewardsResponse = await fetch(`${API_BASE}/api/rewards`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       const rewardsData = await rewardsResponse.json();
 
       // Fetch lifetime points
-      const lifetimeResponse = await fetch('http://127.0.0.1:5000/api/point_txns/lifetime', {
+      const lifetimeResponse = await fetch(`${API_BASE}/api/point_txns/lifetime`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       const lifetimeData = await lifetimeResponse.json();
 
       // Fetch profile stats
-      const statsResponse = await fetch('http://127.0.0.1:5000/api/profile/stats', {
+      const statsResponse = await fetch(`${API_BASE}/api/profile/stats`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       const statsData = await statsResponse.json();
