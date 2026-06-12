@@ -5,6 +5,7 @@ import json
 import os
 import re
 import uuid
+import requests
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1412,6 +1413,59 @@ def get_motivational_context(user_id: str) -> dict:
         }
 
 
+_OPEN_METEO_FORECAST_URL = (
+    "https://api.open-meteo.com/v1/forecast"
+    "?latitude=34.14&longitude=-117.97"
+    "&current=temperature_2m,precipitation,wind_speed_10m"
+    "&temperature_unit=fahrenheit&wind_speed_unit=mph"
+)
+
+
+def get_workout_weather(user_id: str) -> dict:
+    """Fetch current weather to advise whether it's a good day for an
+    outdoor workout. Uses the Open-Meteo API (no key required).
+
+    Args:
+        user_id: Authenticated user's id (string from JWT).
+
+    Returns:
+        dict with temperature_f, precipitation, wind_speed_mph, and
+        outdoor_workout_recommendation (``great``, ``okay``, or
+        ``train indoors``). On failure, dict with key ``error``.
+    """
+    try:
+        response = requests.get(_OPEN_METEO_FORECAST_URL, timeout=5)
+        response.raise_for_status()
+        current = response.json().get("current") or {}
+        temperature_f = float(current["temperature_2m"])
+        precipitation = float(current.get("precipitation") or 0)
+        wind_speed_mph = float(current["wind_speed_10m"])
+
+        if (
+            50 <= temperature_f <= 90
+            and precipitation == 0
+            and wind_speed_mph < 20
+        ):
+            recommendation = "great"
+        elif (
+            temperature_f < 50
+            or temperature_f > 90
+            or precipitation > 0
+        ):
+            recommendation = "train indoors"
+        else:
+            recommendation = "okay"
+
+        return {
+            "temperature_f": temperature_f,
+            "precipitation": precipitation,
+            "wind_speed_mph": wind_speed_mph,
+            "outdoor_workout_recommendation": recommendation,
+        }
+    except Exception:
+        return {"error": "weather data unavailable"}
+
+
 GEMINI_CHAT_TOOLS = [
     get_user_balance,
     get_user_activity_summary,
@@ -1424,6 +1478,7 @@ GEMINI_CHAT_TOOLS = [
     analyze_weekly_pace,
     suggest_weekly_plan,
     get_motivational_context,
+    get_workout_weather,
 ]
 
 
